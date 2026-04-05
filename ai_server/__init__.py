@@ -1,0 +1,1 @@
+"""SkyDetect-AI server package."""
