@@ -3,21 +3,15 @@ schemas_v4.py
 =============
 Sky Detect 프로젝트의 FastAPI 데이터 계약 정의 파일 (v4 주석 강화본)
 
-각 파트가 주고받는 데이터의 형태(타입, 범위, 필수 여부)를 선언합니다.
-Java의 DTO + @Valid 인터페이스와 같은 역할입니다.
+역할:
+- A(영상 처리) → B(특징 추출) → C(분류/응답) 사이의 shared contract를 정의한다.
+- 파트별 데이터 구조를 명확히 고정해 병렬 개발 시 충돌을 줄인다.
+- 현재 A bootstrap server와의 호환도 유지한다.
 
-담당 파트:
-  A (정유찬) - 영상 처리  : StabilizationInfo, TrackPoint, TrackQuality, TrackSequence
-  B (문형주) - 특징 추출  : TrackFeatures, FeatureVector
-  C (강동규) - 분류 & 응답: ClassifyRequest, RuleFilterResult, ResponseQuality,
-                           PredictionResult, BatchPredictionResult
-
-[주의]
-- 이 파일은 shared contract 용도입니다.
-- TrackSequence → FeatureVector → PredictionResult 인터페이스가
-  세 파트의 충돌 방지 핵심입니다.
-- 선언되지 않은 필드는 허용하지 않습니다. (extra="forbid")
-- 현재 A bootstrap server 호환을 위해 AnalyzeRequest / AnalyzeResponse도 유지합니다.
+설계 원칙:
+1. 선언되지 않은 필드는 허용하지 않는다. (extra="forbid")
+2. 같은 의미의 값은 가능한 한 같은 이름을 유지한다. (예: num_points)
+3. 상태 조합이 모순되면 조용히 통과시키지 않고 validation error를 낸다.
 """
 
 from typing import Literal
@@ -30,15 +24,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # =============================================================================
 class StrictModel(BaseModel):
     """
-    shared schema의 공통 부모 모델입니다.
+    모든 shared schema의 공통 부모 모델.
 
-    extra="forbid"를 통해 선언되지 않은 필드가 payload에 들어오면
-    조용히 무시하지 않고 바로 validation error를 발생시킵니다.
+    한 줄 설명:
+        선언되지 않은 필드(extra)를 거부하는 엄격한 BaseModel.
 
-    목적:
-    - 필드 오타 조기 발견
-    - 파트별 드리프트 방지
-    - 병렬 개발 시 계약 깨짐을 빠르게 잡기
+    왜 이렇게 했는가:
+        A/B/C가 병렬로 개발할 때 가장 흔한 문제는 필드 이름 오타, 임의 필드 추가,
+        버전 드리프트다. extra="forbid"를 걸어두면 이런 실수를 초기에 바로 잡을 수 있다.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -47,6 +40,8 @@ class StrictModel(BaseModel):
 # =============================================================================
 # 공통 타입 별칭
 # =============================================================================
+# 한 줄 설명:
+#   반복해서 쓰는 Literal 타입을 별칭으로 빼서 가독성과 일관성을 높인다.
 StabilizationMethod = Literal["none", "ffmpeg_vidstab", "opencv_ecc"]
 TrackStability = Literal["good", "fair", "poor"]
 PredictionLabel = Literal["bird", "drone", "uncertain"]
@@ -66,15 +61,18 @@ RejectReason = Literal[
 
 class StabilizationInfo(StrictModel):
     """
-    영상 손떨림 보정(stabilization) 또는 전역 움직임 보정(global motion compensation)
-    적용 여부와 방식을 기록합니다.
+    영상 안정화/전역 움직임 보정 적용 여부를 담는 모델.
 
-    촬영 영상이 흔들렸을 경우 궤적 품질에 영향을 주므로 함께 전달합니다.
+    한 줄 설명:
+        입력 영상에 stabilization이 적용되었는지와 방법을 기록한다.
 
-    method:
-        - "none"           : 보정 없음
-        - "ffmpeg_vidstab" : FFmpeg vidstab 필터 사용
-        - "opencv_ecc"     : OpenCV ECC 기반 정합 사용
+    왜 이렇게 했는가:
+        손떨림/카메라 움직임이 trajectory 품질에 영향을 주므로,
+        후속 단계(B/C)가 이 메타데이터를 함께 볼 수 있어야 한다.
+
+    필드:
+        applied (bool): 보정 적용 여부
+        method (StabilizationMethod): 사용한 보정 방식
     """
 
     applied: bool = Field(default=False)
@@ -83,18 +81,23 @@ class StabilizationInfo(StrictModel):
 
 class TrackPoint(StrictModel):
     """
-    단일 프레임에서 추적된 비행체의 위치 정보입니다.
-    좌표(cx, cy, w, h)는 모두 [0.0, 1.0] 범위의 정규화된 값입니다.
-    (픽셀 좌표가 아닌 영상 전체 크기 대비 비율)
+    단일 프레임에서 추적된 객체의 위치 정보를 담는 모델.
 
-    더미 데이터 예시:
-        {
-          "frame_index": 0,
-          "timestamp_ms": 0,
-          "cx": 0.40, "cy": 0.62,
-          "w": 0.03, "h": 0.02,
-          "conf": 0.91
-        }
+    한 줄 설명:
+        한 프레임 안에서의 bbox 중심/크기/신뢰도를 표현한다.
+
+    왜 이렇게 했는가:
+        B 파트는 결국 이 시계열(history)로부터 속도, 가속도, heading 변화 등
+        trajectory feature를 계산하므로, 프레임 단위 좌표 구조가 명확해야 한다.
+
+    필드:
+        frame_index (int): 프레임 번호, 0 이상
+        timestamp_ms (int): 해당 프레임 시각(ms), 0 이상
+        cx (float): bbox 중심 x, 0~1 정규화
+        cy (float): bbox 중심 y, 0~1 정규화
+        w (float): bbox 너비, 0~1 정규화
+        h (float): bbox 높이, 0~1 정규화
+        conf (float): 탐지 신뢰도, 0~1
     """
 
     frame_index: int = Field(..., ge=0, description="영상 내 프레임 번호 (0부터 시작)")
@@ -108,53 +111,46 @@ class TrackPoint(StrictModel):
 
 class TrackQuality(StrictModel):
     """
-    전체 트랙(추적 시퀀스)의 품질 지표입니다.
-    파트 C의 규칙 기반 필터가 이 값을 직접 참조합니다.
+    전체 track의 품질 요약 정보를 담는 모델.
 
-    필터 판단 기준 예시 (classifier.py 기본값 기준):
-        num_points    < min_track_length   → short_track
-        mean_conf     < min_mean_conf      → low_confidence
-        missing_ratio > max_missing_ratio  → high_noise
+    한 줄 설명:
+        A가 계산한 track 품질 지표를 B/C에 전달한다.
 
-    A 출력 예시:
-        {
-          "num_points": 42,
-          "mean_conf": 0.89,
-          "missing_ratio": 0.02,
-          "track_stability": "good"
-        }
+    왜 이렇게 했는가:
+        C의 규칙 기반 필터는 모델 추론 전에 track이 분석 가능한 수준인지
+        먼저 판단해야 한다. 그래서 num_points / mean_conf / missing_ratio를
+        구조적으로 받도록 했다.
+
+    필드:
+        num_points (int): 유효 추적 프레임 수
+        mean_conf (float): 전체 프레임 평균 탐지 신뢰도
+        missing_ratio (float): 추적 실패 프레임 비율
+        track_stability (TrackStability): track 품질 등급
     """
 
     num_points: int = Field(..., ge=1, description="유효하게 추적된 프레임 수")
     mean_conf: float = Field(..., ge=0.0, le=1.0, description="전체 프레임 평균 탐지 신뢰도")
     missing_ratio: float = Field(..., ge=0.0, le=1.0, description="추적 실패 프레임 비율")
-    # "good" : 분석에 충분한 품질
-    # "fair" : 분석 가능하나 신뢰도 주의
-    # "poor" : 분석 부적합 → uncertain 처리 권장
     track_stability: TrackStability
 
 
 class TrackSequence(StrictModel):
     """
-    한 비행체에 대한 전체 추적 시퀀스입니다.
-    파트 A → 파트 B로 전달되는 핵심 데이터입니다.
+    하나의 비행체에 대한 전체 추적 시퀀스를 담는 모델.
 
-    출력 예시:
-        {
-          "track_id": 101,
-          "history": [
-            {
-              "frame_index": 1, "timestamp_ms": 40,
-              "cx": 0.452, "cy": 0.312, "w": 0.050, "h": 0.030, "conf": 0.91
-            }
-          ],
-          "quality": {
-            "num_points": 42,
-            "mean_conf": 0.89,
-            "missing_ratio": 0.02,
-            "track_stability": "good"
-          }
-        }
+    한 줄 설명:
+        A → B로 넘기는 핵심 handoff 객체.
+
+    왜 이렇게 했는가:
+        B는 이 객체의 history와 quality를 기반으로 feature를 계산한다.
+        따라서 track_id, history, quality를 하나의 명시적 패키지로 묶는 것이 안전하다.
+
+    필드:
+        track_id (int): track 식별자
+        history (list[TrackPoint]): 프레임별 좌표/크기 목록
+        source_video_id (str | None): 원본 영상 식별자
+        stabilization (StabilizationInfo | None): 영상 보정 정보
+        quality (TrackQuality | None): track 품질 요약
     """
 
     track_id: int = Field(..., ge=0)
@@ -171,19 +167,35 @@ class TrackSequence(StrictModel):
 
 class TrackFeatures(StrictModel):
     """
-    파트 B → 파트 C shared feature contract 입니다.
+    B가 계산한 feature 묶음을 담는 모델.
 
-    [설계 원칙]
-    - Core feature는 MVP 분류에 반드시 필요한 값으로 간주하고 필수로 둡니다.
-    - Optional feature는 단계적 개발 / 연구용 확장 항목으로 두고,
-      초기 개발 단계에서는 None이어도 허용합니다.
-    - 다만 C의 RF 모델이 고정 컬럼을 기대한다면,
-      classifier 내부에서 densify(기본값/학습 평균값 대체) 후 사용해야 합니다.
+    한 줄 설명:
+        RF 분류 전 단계에서 사용하는 trajectory/bbox 기반 feature 벡터.
 
-    [참고 논문 소스]
-    - 1번: Curvature, Turn-related metrics, Velocity/Accel 계열
-    - 2번: BBox Area Stats (날갯짓 / 크기 변화 분석)
-    - 3번: Maneuverability Sigma(σ), Heading Change 관련 지표
+    왜 이렇게 했는가:
+        - Core feature는 MVP 단계에서 항상 계산 가능해야 하므로 required로 둔다.
+        - 연구/확장 단계 feature는 아직 미구현일 수 있으므로 Optional로 둔다.
+        - 이렇게 하면 B 개발 현실을 반영하면서도 shared schema를 유지할 수 있다.
+
+    주의:
+        Optional feature가 None일 수 있으므로,
+        C에서 RF 입력 전에 densify(기본값/학습 평균값 대체)를 해야 할 수 있다.
+
+    필드:
+        [Core / required]
+            v_mean: 평균 속도
+            v_std: 속도 표준편차
+            a_mean: 평균 가속도
+            heading_change_ratio: 방향 전환 비율
+            maneuverability_sigma: 기동성 지표 σ
+
+        [Optional / staged rollout]
+            curvature_mean: 평균 곡률
+            curvature_cv: 곡률 변동계수
+            turning_angle_mean: 평균 전환각
+            bbox_area_mean: bbox 면적 평균
+            bbox_area_std: bbox 면적 표준편차
+            glcm_corr: 텍스처 상관관계
     """
 
     # -------------------------------------------------------------------------
@@ -223,17 +235,28 @@ class TrackFeatures(StrictModel):
 
 class FeatureVector(StrictModel):
     """
-    파트 B(문형주) → 파트 C(강동규)로 전달되는 최종 특징 벡터 패키지
+    B → C로 전달되는 최종 feature 패키지.
 
-    feature_status 의미:
-        - "ok"      : core feature 정상 계산 완료
-        - "partial" : 일부 값이 보간/수정되었거나 optional metric이 비어 있음
-        - "failed"  : feature 계산 자체 실패
+    한 줄 설명:
+        특징값 + 품질 정보 + feature 계산 상태를 함께 넘기는 handoff 모델.
 
-    규칙:
+    왜 이렇게 했는가:
+        단순히 features만 넘기면,
+        C는 "정상 계산인지 / 일부 보간했는지 / 완전 실패인지"를 알 수 없다.
+        그래서 feature_status와 imputed_fields를 같이 넣어
+        모델 추론 전 rule-based filtering이나 fallback 판단이 가능하도록 했다.
+
+    필드:
+        track_id (int): 대응되는 track 식별자
+        features (TrackFeatures | None): 계산된 feature들
+        quality (TrackQuality | None): A가 만든 품질 정보
+        feature_status (FeatureStatus): 계산 상태 ("ok" / "partial" / "failed")
+        imputed_fields (list[str]): 보간/수정된 필드 목록
+
+    상태 규칙:
         - failed  → features는 반드시 None
-        - ok/partial → features는 반드시 존재
-        - imputed_fields는 partial일 때만 허용
+        - ok      → features는 반드시 존재
+        - partial → features는 존재해야 하며, 보간한 필드가 있으면 imputed_fields에 기록
     """
 
     track_id: int = Field(..., ge=0)
@@ -244,6 +267,23 @@ class FeatureVector(StrictModel):
 
     @model_validator(mode="after")
     def validate_feature_state(self) -> "FeatureVector":
+        """
+        FeatureVector 내부 상태 조합의 일관성을 검증한다.
+
+        한 줄 설명:
+            feature_status / features / imputed_fields 간 모순을 막는다.
+
+        왜 이렇게 했는가:
+            "failed인데 features가 있음", "ok인데 features가 없음" 같은 payload는
+            시스템 해석을 애매하게 만든다. 이런 모순은 shared schema 단계에서
+            바로 막는 것이 가장 안전하다.
+
+        Returns:
+            FeatureVector: 검증을 통과한 자기 자신
+
+        Raises:
+            ValueError: 상태 조합이 계약 규칙에 맞지 않을 때
+        """
         if self.feature_status == "failed":
             if self.features is not None:
                 raise ValueError("features must be None when feature_status='failed'")
@@ -251,9 +291,11 @@ class FeatureVector(StrictModel):
                 raise ValueError("imputed_fields must be empty when feature_status='failed'")
             return self
 
+        # ok / partial 인 경우에는 최소한 feature 묶음은 있어야 한다.
         if self.features is None:
             raise ValueError("features are required unless feature_status='failed'")
 
+        # imputed_fields는 partial일 때만 의미가 있다.
         if self.feature_status != "partial" and self.imputed_fields:
             raise ValueError("imputed_fields are allowed only when feature_status='partial'")
 
@@ -267,12 +309,20 @@ class FeatureVector(StrictModel):
 
 class ClassifyRequest(StrictModel):
     """
-    Spring Boot → FastAPI로 분류를 요청할 때의 입력 형식입니다.
-    FeatureVector 안에 TrackQuality가 포함되어 있으므로
-    C는 여기서 품질 정보를 꺼내 규칙 필터를 적용합니다.
+    분류 요청 payload를 담는 모델.
 
-    규칙 필터 임계값은 선택적 override이며,
-    미전달 시 classifier.py 내부 기본값을 사용할 수 있습니다.
+    한 줄 설명:
+        Spring Boot → FastAPI classifier로 들어오는 입력 형식.
+
+    왜 이렇게 했는가:
+        품질 threshold는 상황에 따라 override하고 싶을 수 있어서,
+        기본 feature_vector와 함께 선택적 threshold 파라미터를 받도록 했다.
+
+    필드:
+        feature_vector (FeatureVector): B가 만든 특징 패키지
+        min_track_length (int | None): 최소 유효 트랙 길이 override
+        min_mean_conf (float | None): 최소 평균 신뢰도 override
+        max_missing_ratio (float | None): 최대 누락 비율 override
     """
 
     feature_vector: FeatureVector
@@ -283,19 +333,18 @@ class ClassifyRequest(StrictModel):
 
 class RuleFilterResult(StrictModel):
     """
-    규칙 기반 필터 결과입니다.
-    RF 추론 전에 트랙 품질과 feature 상태를 검사하여
-    분석 가능 여부를 결정합니다.
+    규칙 기반 필터 결과를 담는 모델.
 
-    판단 예시:
-        num_points 부족        → short_track
-        mean_conf 부족         → low_confidence
-        missing_ratio 초과     → high_noise
-        feature 계산 실패      → feature_error
+    한 줄 설명:
+        RF 추론 전에 track/feature 상태를 검사한 결과를 표현한다.
 
-    규칙:
-        passed=True  → reject_reason은 반드시 None
-        passed=False → reject_reason은 반드시 존재
+    왜 이렇게 했는가:
+        품질이 너무 낮은 track는 굳이 RF에 넣기보다 uncertain으로 바로 처리하는 편이
+        더 안전하다. 그래서 reject reason을 명시적으로 남기도록 했다.
+
+    필드:
+        passed (bool): 필터 통과 여부
+        reject_reason (RejectReason | None): 실패 사유 코드
     """
 
     passed: bool
@@ -303,6 +352,22 @@ class RuleFilterResult(StrictModel):
 
     @model_validator(mode="after")
     def validate_reject_reason(self) -> "RuleFilterResult":
+        """
+        passed / reject_reason 조합의 논리 일관성을 검증한다.
+
+        한 줄 설명:
+            통과했으면 사유가 없어야 하고, 실패했으면 사유가 있어야 한다.
+
+        왜 이렇게 했는가:
+            passed=True인데 reject_reason이 채워져 있거나,
+            passed=False인데 이유가 비어 있으면 downstream이 해석하기 애매해진다.
+
+        Returns:
+            RuleFilterResult: 검증을 통과한 자기 자신
+
+        Raises:
+            ValueError: passed와 reject_reason 조합이 모순될 때
+        """
         if self.passed and self.reject_reason is not None:
             raise ValueError("reject_reason must be None when passed=True")
         if not self.passed and self.reject_reason is None:
@@ -312,15 +377,19 @@ class RuleFilterResult(StrictModel):
 
 class ResponseQuality(StrictModel):
     """
-    PredictionResult에 포함되는 품질 요약 블록입니다.
-    응답에서도 A의 naming과 맞추기 위해 num_points를 그대로 사용합니다.
+    최종 응답에 포함되는 품질 요약 블록.
 
-    응답 예시:
-        {
-          "num_points": 74,
-          "track_stability": "good",
-          "feature_status": "ok"
-        }
+    한 줄 설명:
+        Spring Boot에 돌려줄 최소 품질 정보 묶음.
+
+    왜 이렇게 했는가:
+        응답에서도 A의 원래 naming인 num_points를 유지하면
+        중간 remapping drift를 줄일 수 있다.
+
+    필드:
+        num_points (int): 유효 프레임 수
+        track_stability (TrackStability): track 품질 등급
+        feature_status (FeatureStatus): feature 계산 상태
     """
 
     num_points: int = Field(..., ge=0)
@@ -330,32 +399,24 @@ class ResponseQuality(StrictModel):
 
 class PredictionResult(StrictModel):
     """
-    RF 분류 결과 + top feature + 최종 응답입니다.
-    FastAPI → Spring Boot로 반환되는 최종 JSON 구조입니다.
+    최종 분류 결과를 담는 모델.
 
-    응답 예시:
-    {
-      "track_id": 101,
-      "label": "drone",
-      "confidence": 0.86,
-      "rule_filter": {"passed": true, "reject_reason": null},
-      "top_features": {
-        "maneuverability_sigma": 0.31,
-        "heading_change_ratio": 0.27,
-        "bbox_area_std": 0.18
-      },
-      "quality": {
-        "num_points": 74,
-        "track_stability": "good",
-        "feature_status": "ok"
-      },
-      "processing_time_ms": 128
-    }
+    한 줄 설명:
+        C가 계산한 label / confidence / 품질 / 설명용 top feature를 함께 반환한다.
 
-    [주의]
-    top_features 값은 RF Gini importance 기준 상대적 기여도입니다.
-    "왜 이렇게 분류됐는지"의 완전한 인과 설명이라기보다,
-    "모델이 상대적으로 많이 참고한 특징" 정도로 해석합니다.
+    왜 이렇게 했는가:
+        단순 label만 반환하면 왜 uncertain이 되었는지, 어떤 품질 상태였는지,
+        어떤 feature가 상대적으로 중요했는지 알기 어렵다.
+        그래서 운영/디버깅/프론트 연동에 필요한 최소 정보를 함께 묶었다.
+
+    필드:
+        track_id (int): 대응 track 식별자
+        label (PredictionLabel): bird / drone / uncertain
+        confidence (float): 예측 확률
+        rule_filter (RuleFilterResult): 규칙 기반 필터 결과
+        top_features (dict[str, float]): 상대적 기여도가 큰 feature들
+        quality (ResponseQuality): 품질 요약
+        processing_time_ms (int | None): 처리 시간(ms)
     """
 
     track_id: int = Field(..., ge=0)
@@ -369,8 +430,21 @@ class PredictionResult(StrictModel):
 
 class BatchPredictionResult(StrictModel):
     """
-    여러 트랙을 한 번에 분류할 때의 응답 형식입니다.
-    tracks_features.json 처럼 배열 입력을 처리할 때 사용할 수 있습니다.
+    여러 PredictionResult를 한 번에 반환하기 위한 배치 응답 모델.
+
+    한 줄 설명:
+        다수 track 분류 결과를 묶어서 반환한다.
+
+    왜 이렇게 했는가:
+        프론트/백엔드가 전체 개수와 클래스별 집계를 한 번에 받으면
+        후처리와 화면 표시가 단순해진다.
+
+    필드:
+        results (list[PredictionResult]): 개별 결과 목록
+        total_count (int): 전체 개수
+        drone_count (int): drone 수
+        bird_count (int): bird 수
+        uncertain_count (int): uncertain 수
     """
 
     results: list[PredictionResult]
@@ -386,7 +460,15 @@ class BatchPredictionResult(StrictModel):
 
 class AnalyzeRequest(StrictModel):
     """
-    현재 A bootstrap server와의 호환을 위해 유지하는 요청 모델입니다.
+    현재 A bootstrap server와 호환되는 분석 요청 모델.
+
+    한 줄 설명:
+        기존 A 서버가 받는 입력 형식을 유지하기 위한 호환용 DTO.
+
+    필드:
+        source_video_id (str): 원본 영상 식별자
+        video_path (str): 서버 내 영상 경로
+        stabilization_method (StabilizationMethod): 사용할 보정 방식
     """
 
     source_video_id: str = Field(..., min_length=1)
@@ -396,7 +478,15 @@ class AnalyzeRequest(StrictModel):
 
 class AnalyzeResponse(StrictModel):
     """
-    현재 A bootstrap server와의 호환을 위해 유지하는 응답 모델입니다.
+    현재 A bootstrap server와 호환되는 분석 응답 모델.
+
+    한 줄 설명:
+        기존 A 서버가 반환하는 형식을 유지하기 위한 호환용 DTO.
+
+    필드:
+        source_video_id (str): 원본 영상 식별자
+        tracks (list[TrackSequence]): 추적 결과 목록
+        message (str): 처리 결과 메시지
     """
 
     source_video_id: str
