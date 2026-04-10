@@ -7,3 +7,8 @@ __pycache__/
 *.pyd
 .vscode/
 .idea/
+
+# Research artifacts
+research/data/
+research/plots/
+.ipynb_checkpoints/
