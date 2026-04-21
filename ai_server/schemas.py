@@ -159,6 +159,17 @@ class TrackSequence(StrictModel):
     stabilization: StabilizationInfo | None = None
     quality: TrackQuality | None = None
 
+    @model_validator(mode="after")
+    def validate_history_order(self) -> "TrackSequence":
+        for previous, current in zip(self.history, self.history[1:]):
+            if current.frame_index <= previous.frame_index:
+                raise ValueError(
+                    "history must be strictly ordered by frame_index without duplicates"
+                )
+            if current.timestamp_ms < previous.timestamp_ms:
+                raise ValueError("history timestamp_ms must not go backwards")
+        return self
+
 
 # =============================================================================
 # [파트 B] 특징 추출 — 담당: 문형주
