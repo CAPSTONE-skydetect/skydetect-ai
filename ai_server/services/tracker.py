@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from ai_server.schemas import AnalyzeResponse, StabilizationInfo
+from ai_server.services.video_io import VideoIOError, iter_video_frames, load_video_metadata
 
 
 class AnalyzePipelineError(ValueError):
@@ -19,12 +20,24 @@ def run_track_sequence_pipeline(
     if not input_path.is_file():
         raise AnalyzePipelineError(f"Video path is not a file: {input_path}")
 
+    try:
+        metadata = load_video_metadata(str(input_path))
+        first_frame = next(iter_video_frames(str(input_path)), None)
+    except VideoIOError as exc:
+        raise AnalyzePipelineError(str(exc)) from exc
+
+    if first_frame is None:
+        raise AnalyzePipelineError(f"Video contains no readable frames: {input_path}")
+
     return AnalyzeResponse(
         source_video_id=source_video_id,
         tracks=[],
         message=(
             "Pipeline entry initialized from the requested video path "
             f"with stabilization mode '{stabilization.method}'. "
-            "Frame loading, detection, and tracking stages are not connected yet."
+            f"Loaded {metadata.total_frames} frames at {metadata.fps:.3f} FPS "
+            f"({metadata.width}x{metadata.height}); first frame timestamp is "
+            f"{first_frame.timestamp_ms} ms. Detection and tracking stages are "
+            "not connected yet."
         ),
     )
