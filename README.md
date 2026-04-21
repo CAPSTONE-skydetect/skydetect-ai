@@ -86,3 +86,14 @@ uvicorn ai_server.main:app --reload
 The `/analyze` endpoint is still a bootstrap stub that returns a valid
 `TrackSequence` payload so A/B/C can integrate against the shared contract
 before full pipeline logic is connected.
+
+## Compare Stabilization Modes
+
+Run the same sample video once with `none` and once with `ffmpeg_vidstab`:
+
+```bash
+./.venv/bin/python scripts/run_a_compare.py samples/sample.mp4 --source-video-id sample-001
+```
+
+This writes per-run outputs to `artifacts/tracks/` and also creates a
+`*_compare_summary.json` file that records which run succeeded or failed.
