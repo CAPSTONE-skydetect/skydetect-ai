@@ -11,6 +11,7 @@ from ai_server.schemas import (
     TrackSequence,
 )
 from ai_server.services.detector import Detection, FrameDetections, detect_flying_objects
+from ai_server.services.persistence import persist_analyze_response
 from ai_server.services.stabilization import (
     StabilizationStageError,
     run_stabilization_stage,
@@ -75,7 +76,7 @@ def run_track_sequence_pipeline(
     total_detection_count = sum(len(frame.detections) for frame in frame_detections)
     first_frame_timestamp_ms = frame_detections[0].timestamp_ms
 
-    return AnalyzeResponse(
+    response = AnalyzeResponse(
         source_video_id=source_video_id,
         tracks=tracks,
         message=(
@@ -91,6 +92,15 @@ def run_track_sequence_pipeline(
             + " Feature extraction and classification stages are not connected yet."
         ),
     )
+    persistence = persist_analyze_response(response)
+    if persistence.ok:
+        response.message += f" Persisted JSON output to {persistence.output_path}."
+    else:
+        response.message += (
+            " Failed to persist JSON output "
+            f"to {persistence.output_path}: {persistence.error}."
+        )
+    return response
 
 
 def build_track_sequences(

@@ -12,3 +12,6 @@ __pycache__/
 research/data/
 research/plots/
 .ipynb_checkpoints/
+
+# Generated A pipeline outputs
+artifacts/tracks/*.json
