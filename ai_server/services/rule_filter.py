@@ -49,13 +49,15 @@ class RuleFilter:
         if fv.feature_status == "failed":
             return RuleFilterResult(passed=False, reject_reason="feature_error")
 
-        if fv.quality is not None:
-            if fv.quality.num_points < eff_min_length:
-                return RuleFilterResult(passed=False, reject_reason="short_track")
-            if fv.quality.mean_conf < eff_min_conf:
-                return RuleFilterResult(passed=False, reject_reason="low_confidence")
-            if fv.quality.missing_ratio > eff_max_missing:
-                return RuleFilterResult(passed=False, reject_reason="high_noise")
+        if fv.quality is None:
+            return RuleFilterResult(passed=False, reject_reason="feature_error")
+
+        if fv.quality.num_points < eff_min_length:
+            return RuleFilterResult(passed=False, reject_reason="short_track")
+        if fv.quality.mean_conf < eff_min_conf:
+            return RuleFilterResult(passed=False, reject_reason="low_confidence")
+        if fv.quality.missing_ratio > eff_max_missing:
+            return RuleFilterResult(passed=False, reject_reason="high_noise")
 
         if fv.features is not None and self._features_are_noisy(fv.features):
             return RuleFilterResult(passed=False, reject_reason="high_noise")
