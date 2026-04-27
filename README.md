@@ -25,13 +25,15 @@ skydetect-ai/
 │   ├── main.py                           # A: server entrypoint / FastAPI app
 │   ├── schemas.py                        # Shared A/B/C contract source
 │   ├── routers/
-│   │   └── analyze.py                    # A: analysis endpoint
+│   │   ├── analyze.py                    # A: analysis endpoint
+│   │   └── classify.py                   # C: classify endpoint
 │   ├── services/
 │   │   ├── detector.py                   # A: small flying object detection
 │   │   ├── stabilization.py              # A: stabilization metadata/helper
 │   │   ├── tracker.py                    # A: tracking and TrackSequence creation
 │   │   ├── feature_core.py               # B: core motion feature extraction
 │   │   ├── feature_signal.py             # B: extended signal/fractal features
+│   │   ├── rule_filter.py                # C: rule-based pre-filter
 │   │   ├── classifier.py                 # C: classifier inference
 │   │   └── train.py                      # C: training entrypoint
 │   ├── utils/
@@ -42,6 +44,7 @@ skydetect-ai/
 │   ├── models/                           # C: trained model artifacts
 │   └── docs/                             # Shared docs, examples, contracts
 ├── research/                             # B: personal experiments/validation
+├── tests/                                # unit tests
 ├── dummy_track.json                      # Sample payload for manual testing
 ├── requirements.txt
 └── README.md
@@ -61,6 +64,8 @@ skydetect-ai/
   - `ai_server/utils/interpolate.py`
   - `ai_server/utils/fractal.py`
 - C
+  - `ai_server/routers/classify.py`
+  - `ai_server/services/rule_filter.py`
   - `ai_server/services/classifier.py`
   - `ai_server/services/train.py`
   - `ai_server/utils/explain.py`
