@@ -263,7 +263,7 @@ class FeatureVector(StrictModel):
     features: TrackFeatures | None = None
     quality: TrackQuality | None = None
     feature_status: FeatureStatus = "ok"
-    imputed_fields: list[str] = Field(default_factory=list)
+    imputed_fields: list[str] = Field(default_factory=list, examples=[[]])
 
     @model_validator(mode="after")
     def validate_feature_state(self) -> "FeatureVector":
@@ -325,6 +325,35 @@ class ClassifyRequest(StrictModel):
         max_missing_ratio (float | None): 최대 누락 비율 override
     """
 
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "feature_vector": {
+                    "track_id": 1,
+                    "feature_status": "ok",
+                    "features": {
+                        "v_mean": 18.5,
+                        "v_std": 0.22,
+                        "a_mean": 0.08,
+                        "heading_change_ratio": 0.14,
+                        "maneuverability_sigma": 5.82,
+                    },
+                    "quality": {
+                        "num_points": 10,
+                        "mean_conf": 0.9,
+                        "missing_ratio": 0.05,
+                        "track_stability": "good",
+                    },
+                    "imputed_fields": [],
+                },
+                "min_track_length": None,
+                "min_mean_conf": None,
+                "max_missing_ratio": None,
+            }
+        },
+    )
+
     feature_vector: FeatureVector
     min_track_length: int | None = Field(default=None, ge=1, description="최소 유효 트랙 길이")
     min_mean_conf: float | None = Field(default=None, ge=0.0, le=1.0, description="최소 평균 탐지 신뢰도")
@@ -346,6 +375,13 @@ class RuleFilterResult(StrictModel):
         passed (bool): 필터 통과 여부
         reject_reason (RejectReason | None): 실패 사유 코드
     """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {"passed": False, "reject_reason": "short_track"},
+        },
+    )
 
     passed: bool
     reject_reason: RejectReason | None = None

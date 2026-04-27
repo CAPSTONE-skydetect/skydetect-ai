@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venv/Scripts/python -m pytest tests/test_rule_filter.py -v)",
+      "Bash(venv/Scripts/python.exe -m pytest tests/test_rule_filter.py -v)",
+      "PowerShell(C:\\\\Develop\\\\skydetect\\\\skydetect-ai\\\\venv\\\\bin\\\\python -m pytest C:\\\\Develop\\\\skydetect\\\\skydetect-ai\\\\tests\\\\test_rule_filter.py -v)",
+      "Bash(venv/bin/python -m pytest tests/test_rule_filter.py -v)",
+      "Bash(/c/Develop/skydetect/skydetect-ai/venv/bin/python -m pytest tests/test_rule_filter.py -v)",
+      "Bash(python -m pytest tests/test_rule_filter.py -v)",
+      "Bash(python -c \"import ai_server\")",
+      "PowerShell(& \"C:\\\\Users\\\\kangk\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\python.exe\" --version 2>&1)",
+      "PowerShell(wsl -e python3 --version 2>&1)",
+      "PowerShell(wsl -e bash -c \"cd /mnt/c/Develop/skydetect/skydetect-ai && source venv/bin/activate && python -m pytest tests/test_rule_filter.py -v\" 2>&1)",
+      "PowerShell(wsl -e bash -c \"cd /mnt/c/Develop/skydetect/skydetect-ai && source venv/bin/activate && pip install pytest -q && python -m pytest tests/test_rule_filter.py -v\" 2>&1)",
+      "PowerShell(wsl -e bash -c \"cd /mnt/c/Develop/skydetect/skydetect-ai && source venv/bin/activate && uvicorn ai_server.main:app --reload --port 8000\" 2>&1)"
+    ]
+  }
+}
