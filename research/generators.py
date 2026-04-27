@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+# 조류의 생물학적 특성을 반영한 설정 사전
 SPECIES_CONFIG = {
     """
     논문 Table 1 및 종별 특성을 반영한 설정 사전
@@ -19,6 +20,18 @@ SPECIES_CONFIG = {
     "seagull": { "s_star": 15.0, "k_s" : 0.8, "phi_max": 35, "sigma_s": 0.4, "sigma_phi": 0.06, "k_g": 1.0 },
     "falcon":  { "s_star": 25.0, "k_s" : 1.2, "phi_max": 60, "sigma_s": 0.3, "sigma_phi": 0.05, "k_g": 2.5 }
 }
+
+# 드론의 기계적 특성을 반영한 설정 사전
+DRONE_CONFIG = {
+        "quadcopter": {
+            "s_star": 15.0,      # 선호 속도 (촬영용 드론 평균)
+            "a_max": 8.0,        # 최대 가속도 (m/s^2)
+            "k_a": 2.0,          # 가속도 반응 계수
+            "sigma_s": 0.05,     # 속도 노이즈 (조류의 1/10 수준으로 매우 낮음)
+            "sigma_u": 0.02,     # 방향 노이즈 (매우 낮음)
+            "k_h": 0.5           # 고도 제어 강도
+        }
+    }
 
 class Environment:
     def __init__(self, fps=30, wind_speed=1.0, gust_intensity=0.5, goal_pos=None):
@@ -188,6 +201,70 @@ class BirdDyn(BaseAgent):
         wind = self.env.update_and_get_wind()
         v_ground = self.s * self.u + wind
         
+        new_pos = self.update_position(v_ground)
+        self.history.append(new_pos.copy())
+
+        return new_pos
+
+class DroneDyn(BaseAgent):
+    def __init__(self, env, model='quadcopter', **kwargs):
+        super().__init(env, **kwargs)
+    
+        # 1. 드론 파라미터 로드
+        config = self.DRONE_CONFIG.get(model.lower(), self.DRONE_CONFIG["quadcopter"])
+
+        self.model = model
+        self.s_star = config["s_star"]      # 선호 대기 속도
+        self.a_max = config["a_max"]        # 모터 출력 한계
+        self.k_a = config["k_a"]            # 제어기 민감도
+        self.sigma_s = config["sigma_s"]    # 대기 속도 노이즈
+        self.sigma_u = config["sigma_u"]    # 헤딩 노이즈
+        self.k_h = config["k_h"]            # 고도 유지 강도
+
+        # 2. 상태 변수 초기화 
+        # 드론은 현재 대기 속도 벡터(v_air)를 직접 관리\
+        self.v_air = self.s * self.u
+
+    def step(self):
+        """
+        매 프레임마다 드론의 가속도 제어 및 위치 업데이트
+        """ 
+        # --- (1) 목표 대기 속도 벡터 계산 ---
+        # 드론은 현재 위치에서 목표물을 향해 s_star의 속도로 가고 싶어함
+        u_goal = self.get_unit_vector_to_goal()
+        
+        # 고도 보정 로직 (z축 속도 성분 조정)
+        h_error = self.env.h_star - self.pos[2]
+        u_goal[2] += self.k_h * (h_error / self.s_star)
+        u_goal = u_goal / np.linalg.norm(u_goal) # 재정규화
+        
+        v_target = self.s_star * u_goal
+
+        # --- (2) 가속도 제어 (Acceleration Control) ---
+        # 현재 속도와 목표 속도의 차이를 메우기 위한 가속도 계산
+        # a = k_a * (v_target - v_air)
+        accel = self.k_a * (v_target - self.v_air)
+        
+        # 물리적 한계(모터 출력)에 따른 가속도 제한(Clipping)
+        accel_mag = np.linalg.norm(accel)
+        if accel_mag > self.a_max:
+            accel = (accel / accel_mag) * self.a_max
+
+        # --- (3) 속도 벡터 업데이트 [Euler Integration] ---
+        # v_air = v_air + accel * dt + noise
+        noise_v = self.sigma_s * np.random.normal(0, 1, 3) * np.sqrt(self.dt)
+        self.v_air += accel * self.dt + noise_v
+        
+        # 업데이트된 v_air로부터 현재 속도(s)와 방향(u) 추출
+        self.s = np.linalg.norm(self.v_air)
+        self.u = self.v_air / (self.s + 1e-6)
+
+        # --- (4) 최종 지면 속도(v_ground) 계산 및 이동 ---
+        # 지면 속도 = 비행체의 추진 속도 + 환경풍
+        wind = self.env.update_and_get_wind()
+        v_ground = self.v_air + wind
+        
+        # 위치 업데이트 및 이력 저장
         new_pos = self.update_position(v_ground)
         self.history.append(new_pos.copy())
 
