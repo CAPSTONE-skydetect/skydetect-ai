@@ -16,9 +16,12 @@ SPECIES_CONFIG = {
     sigma_phi : 뱅크각 노이즈
     k_g : 목표 추적 강도
     """
-    "pigeon": { "s_star": 12.0, "k_s" : 1.5, "phi_max": 45, "sigma_s": 0.8, "sigma_phi": 0.12, "k_g": 1.5 },
-    "seagull": { "s_star": 15.0, "k_s" : 0.8, "phi_max": 35, "sigma_s": 0.4, "sigma_phi": 0.06, "k_g": 1.0 },
-    "falcon":  { "s_star": 25.0, "k_s" : 1.2, "phi_max": 60, "sigma_s": 0.3, "sigma_phi": 0.05, "k_g": 2.5 }
+    "pigeon": { "s_star": 12.0, "k_s" : 1.5, "phi_max": 45, "sigma_s": 0.8, "sigma_phi": 0.12, "k_g": 1.5,
+               "real_w": 0.6, "real_h": 0.2 },
+    "seagull": { "s_star": 15.0, "k_s" : 0.8, "phi_max": 35, "sigma_s": 0.4, "sigma_phi": 0.06, "k_g": 1.0, 
+                "real_w": 1.2, "real_h": 0.3 },
+    "falcon":  { "s_star": 25.0, "k_s" : 1.2, "phi_max": 60, "sigma_s": 0.3, "sigma_phi": 0.05, "k_g": 2.5,
+                "real_w": 1.0, "real_h": 0.25 }
 }
 
 # 드론의 기계적 특성을 반영한 설정 사전
@@ -29,7 +32,8 @@ DRONE_CONFIG = {
             "k_a": 2.0,          # 가속도 반응 계수
             "sigma_s": 0.05,     # 속도 노이즈 (조류의 1/10 수준으로 매우 낮음)
             "sigma_u": 0.02,     # 방향 노이즈 (매우 낮음)
-            "k_h": 0.5           # 고도 제어 강도
+            "k_h": 0.5,           # 고도 제어 강도
+            "real_w": 0.5, "real_h": 0.15
         }
     }
 
@@ -103,6 +107,11 @@ class BaseAgent(ABC) :
 
         self.history = []
 
+        # 3. 투영을 위한 물리적 제원 (자식 클래스에서 오버라이드 가능)
+        # 실제 서비스에서 bbox 크기(w, h)를 결정하는 기준 (단위: m)
+        self.real_width = 0.5   # 객체의 실제 가로 크기
+        self.real_height = 0.2  # 객체의 실제 세로 크기
+
     def get_unit_vector_to_goal(self):
         """
         현재 위치에서 목표 지점(Environment.x_goal)을 향하는 단위 벡터 계산
@@ -129,6 +138,51 @@ class BaseAgent(ABC) :
         """
         self.pos += v_ground * self.dt
         return self.pos
+    
+    def get_observation(self, frame_index) :
+        """ 
+        현재의 3D 상태를 서비스 규격(JSON)의 단일 프레임 데이터로 변환
+        : param frame_index: 현재 프레임 번호
+        : return: TrackPoint 형식의 dict 
+        """
+
+        # 1. 가상 카메라 파라미터 설정 (1920x1080 해상도 가정)
+        fov = 90  # 화각 (대각선 기준 90도 가정)
+        f = 1.0 / np.tan(np.radians(fov / 2)) # 초점 거리(focal length) 정규화
+
+        # 2. 카메라 기준 좌표 변환 
+        # 카메라가 [0, 0, 0]에서 하늘(Z축)을 바라본다고 가정
+        x, y, z = self.pos
+    
+        # 분모가 0이 되는 것을 방지 
+        # z는 카메라와의 거리(고도) 역할 수행
+        z_safe = max(z, 1.0)
+
+        # 3. Perspective Projection (원근 투영) 적용
+        # cx, cy는 화면 중심(0.5)을 기준으로 투영됨
+        proj_x = (x / z_safe) * f
+        proj_y = (y / z_safe) * f
+
+        # 0.0 ~ 1.0 범위로 정규화 및 클리핑
+        cx = np.clip(proj_x + 0.5, 0.0, 1.0)
+        cy = np.clip(proj_y + 0.5, 0.0, 1.0)
+
+        # 4. 바운딩 박스 크기(w, h) 계산
+        # 원근법에 의해 거리가 멀어질수록 작아짐
+        w = (self.real_width / z_safe) * f
+        h = (self.real_height / z_safe) * f
+
+        # 5. 최종 데이터 매핑 (Part B 입력 규격)
+        return {
+            "frame_index": frame_index,
+            "timestamp_ms": int(frame_index * (1000 / self.env.fps)),
+            "cx": round(float(cx), 4),
+            "cy": round(float(cy), 4),
+            "w": round(float(np.clip(w, 0.001, 0.5)), 4),
+            "h": round(float(np.clip(h, 0.001, 0.5)), 4),
+            "conf": round(float(np.random.uniform(0.92, 0.99)), 2) # 탐지 신뢰도 모사
+        }
+
 
 class BirdDyn(BaseAgent):
     def __init__(self, env, species="pigeon", **kwargs):
@@ -144,6 +198,9 @@ class BirdDyn(BaseAgent):
         self.sigma_s = config["sigma_s"]
         self.sigma_phi = config["sigma_phi"]
         self.k_g = config["k_g"]
+
+        self.real_width = config["real_w"]
+        self.real_height = config["real_h"]
 
         # 2. 공통 파라미터 (논문 기준값)
         self.k_phi = 4.0      # 뱅크각 반응 속도
