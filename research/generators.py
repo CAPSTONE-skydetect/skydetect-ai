@@ -1,9 +1,9 @@
 import numpy as np
 import json
+import os
 from datetime import datetime
 from abc import ABC, abstractmethod
 
-import numpy as np
 
 # 조류의 생물학적 특성을 반영한 설정 사전
 SPECIES_CONFIG = {
@@ -326,4 +326,78 @@ class DroneDyn(BaseAgent):
         self.history.append(new_pos.copy())
 
         return new_pos
+
+class TrajectoryGenerator:
+    def __init__(self, env, output_dir="research/output"):
+        """
+        시뮬레이션 에이전트를 구동하고 결과를 서비스 규격 JSON으로 내보내는 클래스
+        : param env: Environment 객체
+        : param output_dir: JSON 파일이 저장될 경로
+        """
+        self.env = env
+        self.output_dir = output_dir
+
+        # 출력 디렉토리가 없으면 생성
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
+    
+    def generate(self, agent, num_frames=150, track_id=1):
+        """
+        특정 에이전트를 시뮬레이션하여 궤적 데이터 생성
+        : param agent: BirdDyn 또는 DroneDyn 인스턴스
+        : param num_frames: 생성할 프레임 수 (기본 150fps = 5초)
+        : param track_id: 객체 식별 번호
+        : return: 서비스 규격에 맞춘 Dictionary 데이터 
+        """
+        history_2d = []
+
+        # 1. 시뮬레이션 루프 수행
+        for i in range(num_frames):
+            # 물리 상태 업데이트 (3D)
+            agent.step()
+            
+            # 현재 상태 관측 (3D -> 2D 투영)
+            # BaseAgent에 구현한 get_observation 호출
+            observation = agent.get_observation(frame_index=i)
+            history_2d.append(observation)
         
+        # 2. 품질 메트릭 계산 (Part B 서비스 규격 반영)
+        total_conf = sum(p['conf'] for p in history_2d)
+        mean_conf = round(total_conf / len(history_2d), 3)
+
+        # 3. 최종 JSON 구조체 매핑
+        # agent의 클래스명과 종/모델 정보를 조합하여 식별자 생성
+        agent_type = agent.__class__.__name__
+        sub_type = getattr(agent, 'species', getattr(agent, 'model', 'unknown'))
+        
+        data = {
+            "track_id": track_id,
+            "source_video_id": f"SIM_{agent_type.upper()}_{sub_type.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            "stabilization": {
+                "applied": True,
+                "method": "simulation_ideal"
+            },
+            "history": history_2d,
+            "quality": {
+                "num_points": len(history_2d),
+                "mean_conf": mean_conf,
+                "missing_ratio": 0.0,
+                "track_stability": "good" if mean_conf > 0.9 else "fair"
+            }
+        }
+        return data
+
+    def save(self, data, filename=None):
+        """
+        생성된 데이터를 JSON 파일로 물리적 저장
+        """
+        if filename is None:
+            filename = f"{data['source_video_id']}_track{data['track_id']}.json"
+        
+        file_path = os.path.join(self.output_dir, filename)
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        print(f"✅ 데이터 생성 완료: {file_path}")
+        return file_path
