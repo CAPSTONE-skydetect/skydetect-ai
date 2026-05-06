@@ -6,8 +6,7 @@ from abc import ABC, abstractmethod
 
 
 # 조류의 생물학적 특성을 반영한 설정 사전
-SPECIES_CONFIG = {
-    """
+"""
     논문 Table 1 및 종별 특성을 반영한 설정 사전
     s_star : 선호 속도
     k_star : 속도 적응률
@@ -15,7 +14,8 @@ SPECIES_CONFIG = {
     sigma_s : 속도 노이즈
     sigma_phi : 뱅크각 노이즈
     k_g : 목표 추적 강도
-    """
+"""
+SPECIES_CONFIG = {
     "pigeon": { "s_star": 12.0, "k_s" : 1.5, "phi_max": 45, "sigma_s": 0.8, "sigma_phi": 0.12, "k_g": 1.5,
                "real_w": 0.6, "real_h": 0.2 },
     "seagull": { "s_star": 15.0, "k_s" : 0.8, "phi_max": 35, "sigma_s": 0.4, "sigma_phi": 0.06, "k_g": 1.0, 
@@ -46,6 +46,7 @@ class Environment:
         : param gust_intensity: 바람의 강도 (sigma_w) 
         : param goal_pos: 비행체가 향할 고정 목표 지점 [x, y, z]
         """
+        self.fps = fps
 
         # 한 프레임과 다음 프레임 사이의 시간 간격(dt)
         self.dt = 1.0 / fps
@@ -137,50 +138,51 @@ class BaseAgent(ABC) :
         x(t + dt) = x(t) + v_ground * dt
         """
         self.pos += v_ground * self.dt
+        self.history.append(self.pos.copy())
         return self.pos
     
-    def get_observation(self, frame_index) :
-        """ 
-        현재의 3D 상태를 서비스 규격(JSON)의 단일 프레임 데이터로 변환
-        : param frame_index: 현재 프레임 번호
-        : return: TrackPoint 형식의 dict 
+    def get_observation(self, frame_index):
         """
-
-        # 1. 가상 카메라 파라미터 설정 (1920x1080 해상도 가정)
-        fov = 90  # 화각 (대각선 기준 90도 가정)
-        f = 1.0 / np.tan(np.radians(fov / 2)) # 초점 거리(focal length) 정규화
-
-        # 2. 카메라 기준 좌표 변환 
-        # 카메라가 [0, 0, 0]에서 하늘(Z축)을 바라본다고 가정
+        [Simplified Lateral Mapping]
+        - CX: X축(전진 거리)을 화면 가로에 매핑 
+        - CY: Z축(고도)을 화면 세로에 매핑 
+        - BBox: Y축(관측자와의 거리)에 반비례하여 크기 결정 
+        """
+        # 1. 현재 3D 위치 좌표 가져오기 
         x, y, z = self.pos
-    
-        # 분모가 0이 되는 것을 방지 
-        # z는 카메라와의 거리(고도) 역할 수행
-        z_safe = max(z, 1.0)
+        
+        # 2. 화면 가시 범위 설정 (고정된 도화지 크기)
+        # X축(전진) 130m, Z축(고도) 110m를 0.0 ~ 1.0 범위에 매핑합니다.
+        max_x = 130.0
+        max_z = 110.0
 
-        # 3. Perspective Projection (원근 투영) 적용
-        # cx, cy는 화면 중심(0.5)을 기준으로 투영됨
-        proj_x = (x / z_safe) * f
-        proj_y = (y / z_safe) * f
+        # 3. 좌표 선형 매핑 (Normalization) [cite: 18]
+        # cx: 0.0(왼쪽 끝) ~ 1.0(오른쪽 끝) 
+        cx = x / max_x
+        
+        # cy: 0.0(하늘/Top) ~ 1.0(지면/Bottom) 
+        # 고도(z)가 높을수록 0에 가깝게 계산합니다.
+        cy = 1.0 - (z / max_z)
 
-        # 0.0 ~ 1.0 범위로 정규화 및 클리핑
-        cx = np.clip(proj_x + 0.5, 0.0, 1.0)
-        cy = np.clip(proj_y + 0.5, 0.0, 1.0)
+        # 4. 바운딩 박스 크기 계산 (물리적 거리감 반영) 
+        # 관측자와의 거리(Y)가 80m 이상인 컨셉을 유지합니다.
+        distance = max(y, 50.0) 
+        
+        # focal_constant를 1.0으로 설정하여 80m 밖의 실제 크기 비중을 구현합니다.
+        # 박스가 너무 작아 소실되는 것을 방지하기 위해 최소 크기(0.005)를 보장합니다.
+        focal_constant = 10.0
+        w = (self.real_width / distance) * focal_constant
+        h = (self.real_height / distance) * focal_constant
 
-        # 4. 바운딩 박스 크기(w, h) 계산
-        # 원근법에 의해 거리가 멀어질수록 작아짐
-        w = (self.real_width / z_safe) * f
-        h = (self.real_height / z_safe) * f
-
-        # 5. 최종 데이터 매핑 (Part B 입력 규격)
+        # 5. 서비스 규격(JSON) 데이터 반환 
         return {
             "frame_index": frame_index,
             "timestamp_ms": int(frame_index * (1000 / self.env.fps)),
-            "cx": round(float(cx), 4),
-            "cy": round(float(cy), 4),
-            "w": round(float(np.clip(w, 0.001, 0.5)), 4),
-            "h": round(float(np.clip(h, 0.001, 0.5)), 4),
-            "conf": round(float(np.random.uniform(0.92, 0.99)), 2) # 탐지 신뢰도 모사
+            "cx": round(float(np.clip(cx, 0.0, 1.0)), 4),
+            "cy": round(float(np.clip(cy, 0.0, 1.0)), 4),
+            "w": round(float(np.clip(w, 0.005, 0.2)), 4),
+            "h": round(float(np.clip(h, 0.005, 0.2)), 4),
+            "conf": round(float(np.random.uniform(0.92, 0.99)), 2)
         }
 
 
@@ -189,7 +191,7 @@ class BirdDyn(BaseAgent):
         super().__init__(env, **kwargs)
 
         # 1. 종별 파라미터 로드 (기본값 : 비둘기)
-        config = self.SPECIES_CONFIG.get(species.lower(), self.SPECIES_CONFIG["pigeon"])
+        config = SPECIES_CONFIG.get(species.lower(), SPECIES_CONFIG["pigeon"])
 
         self.species = species
         self.s_star = config["s_star"]
@@ -257,18 +259,15 @@ class BirdDyn(BaseAgent):
         # --- (4) 최종 위치 업데이트 (바람 반영) ---
         wind = self.env.update_and_get_wind()
         v_ground = self.s * self.u + wind
-        
-        new_pos = self.update_position(v_ground)
-        self.history.append(new_pos.copy())
+        return self.update_position(v_ground)
 
-        return new_pos
 
 class DroneDyn(BaseAgent):
     def __init__(self, env, model='quadcopter', **kwargs):
-        super().__init(env, **kwargs)
+        super().__init__(env, **kwargs)
     
         # 1. 드론 파라미터 로드
-        config = self.DRONE_CONFIG.get(model.lower(), self.DRONE_CONFIG["quadcopter"])
+        config = DRONE_CONFIG.get(model.lower(), DRONE_CONFIG["quadcopter"])
 
         self.model = model
         self.s_star = config["s_star"]      # 선호 대기 속도
@@ -321,11 +320,12 @@ class DroneDyn(BaseAgent):
         wind = self.env.update_and_get_wind()
         v_ground = self.v_air + wind
         
+        return self.update_position(v_ground)
         # 위치 업데이트 및 이력 저장
-        new_pos = self.update_position(v_ground)
-        self.history.append(new_pos.copy())
+        # new_pos = self.update_position(v_ground)
+        # self.history.append(new_pos.copy())
 
-        return new_pos
+        # return new_pos
 
 class TrajectoryGenerator:
     def __init__(self, env, output_dir="research/output"):
