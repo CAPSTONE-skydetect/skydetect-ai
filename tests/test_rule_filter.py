@@ -90,10 +90,11 @@ class TestPass:
         result = RuleFilter().apply(fv)
         assert result.passed is True
 
-    def test_quality_none_skips_quality_checks(self):
+    def test_quality_none_is_rejected_as_feature_error(self):
         fv = _make_fv(include_quality=False)
         result = RuleFilter().apply(fv)
-        assert result.passed is True
+        assert result.passed is False
+        assert result.reject_reason == "feature_error"
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +210,8 @@ class TestHighNoiseFeatures:
         assert result.passed is False
         assert result.reject_reason == "high_noise"
 
-    def test_feature_noise_skipped_when_quality_none_and_features_clean(self):
+    def test_quality_none_rejected_before_feature_noise_check(self):
         fv = _make_fv(include_quality=False)
-        assert RuleFilter().apply(fv).passed is True
+        result = RuleFilter().apply(fv)
+        assert result.passed is False
+        assert result.reject_reason == "feature_error"
