@@ -42,6 +42,7 @@ def classify(payload: ClassifyRequest) -> PredictionResult:
 
     quality = ResponseQuality(
         num_points=fv.quality.num_points if fv.quality else 0,
+        mean_conf=fv.quality.mean_conf if fv.quality else 0.0,
         track_stability=fv.quality.track_stability if fv.quality else "poor",
         feature_status=fv.feature_status,
     )

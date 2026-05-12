@@ -424,11 +424,13 @@ class ResponseQuality(StrictModel):
 
     필드:
         num_points (int): 유효 프레임 수
+        mean_conf (float): 전체 프레임 평균 탐지 신뢰도
         track_stability (TrackStability): track 품질 등급
         feature_status (FeatureStatus): feature 계산 상태
     """
 
     num_points: int = Field(..., ge=0)
+    mean_conf: float = Field(..., ge=0.0, le=1.0, description="전체 프레임 평균 탐지 신뢰도")
     track_stability: TrackStability
     feature_status: FeatureStatus
 
