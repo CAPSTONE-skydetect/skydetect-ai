@@ -276,9 +276,13 @@ class DroneDyn(BaseAgent):
         self.sigma_s = config["sigma_s"]    # 대기 속도 노이즈
         self.sigma_u = config["sigma_u"]    # 헤딩 노이즈
         self.k_h = config["k_h"]            # 고도 유지 강도
+        
+        # 수정 포인트: 실물 크기 반영 (Review 반영)
+        self.real_width = config["real_w"]
+        self.real_height = config["real_h"]
 
         # 2. 상태 변수 초기화 
-        # 드론은 현재 대기 속도 벡터(v_air)를 직접 관리\
+        # 드론은 현재 대기 속도 벡터(v_air)를 직접 관리
         self.v_air = self.s * self.u
 
     def step(self):
