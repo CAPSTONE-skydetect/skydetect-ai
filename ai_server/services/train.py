@@ -62,7 +62,7 @@ def train_and_save(output_path: str = _DEFAULT_MODEL_PATH) -> None:
     )
 
     clf = RandomForestClassifier(n_estimators=100, random_state=42)
-    clf.fit(X_train, y_train)
+    clf.fit(X_train, y_train) # 학습
 
     accuracy = clf.score(X_test, y_test)
     print(f"RF 학습 완료 — test accuracy: {accuracy:.4f}")
