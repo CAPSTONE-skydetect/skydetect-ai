@@ -15,3 +15,4 @@ research/plots/
 
 # Generated A pipeline outputs
 artifacts/tracks/*.json
+artifacts/experiments/

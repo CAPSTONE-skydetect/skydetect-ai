@@ -60,8 +60,9 @@ def _run_ffmpeg_vidstab(input_path: Path) -> StabilizationStageResult:
     work_dir.mkdir(parents=True, exist_ok=True)
 
     job_id = uuid4().hex
-    transforms_path = work_dir / f"{input_path.stem}_{job_id}.trf"
-    output_path = work_dir / f"{input_path.stem}_{job_id}_stabilized.mp4"
+    safe_stem = _safe_ffmpeg_stem(input_path.stem)
+    transforms_path = work_dir / f"{safe_stem}_{job_id}.trf"
+    output_path = work_dir / f"{safe_stem}_{job_id}_stabilized.mp4"
 
     detect_cmd = [
         ffmpeg_bin,
@@ -130,3 +131,7 @@ def _run_ffmpeg_vidstab(input_path: Path) -> StabilizationStageResult:
 def _last_stderr_line(stderr: str) -> str:
     lines = [line.strip() for line in stderr.splitlines() if line.strip()]
     return lines[-1] if lines else ""
+
+
+def _safe_ffmpeg_stem(value: str) -> str:
+    return "".join(char if char.isalnum() or char in "._-" else "_" for char in value).strip("._") or "video"
