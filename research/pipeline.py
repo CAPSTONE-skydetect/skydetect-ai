@@ -125,4 +125,35 @@ class BatchRunner:
 
         return sim_entry
 
+    def execute_batch_pipeline(self, bird_samples_per_species: int = 50, drone_samples_per_model: int = 150) -> str:
+        """
+        4대 세분화 시나리오 전체를 순회하며 새 600개, 드론 600개(총 1,200개)의 유효 데이터셋을 대량 생산합니다.
+        """
+        scenarios = ["steady_cruise", "sudden_dash", "sharp_turns", "multi_mode"]
+        birds = ["pigeon", "seagull", "falcon"]
+
+        results = []
+        print("=" * 65)
+        print(f" [Phase 1: Batch Runner] 4대 특화 시나리오 공정 가동 시작")
+        print(f"   └ 목표 수량: 조류 600개 (3종 × 50개 × 4시나리오)")
+        print(f"   └ 목표 수량: 드론 600개 (1종 × 150개 × 4시나리오)")
+        print("=" * 65)
+
+        # 외부 루프 (Scenario Loop)
+        for scenario in scenarios:
+            print(f"현재 가동 중인 시나리오 파이프라인: [{scenario.upper()}]")
+            
+            # 내부 루프 1: 조류 군집 데이터 획득 (시나리오당 종별 50개 샘플)
+            for species in birds:
+                for idx in range(1, bird_samples_per_species + 1):
+                    sim_data = self._run_single_simulation(scenario, "bird", species, idx)
+                    # 데이터 유효 품질 방어벽 (최소 50프레임 이상 비행한 데이터만 인정)
+                    if len(sim_data["observations"]) >= 50:
+                        results.append(sim_data)
+
+            # 내부 루프 2: 드론 군집 데이터 획득 (시나리오당 150개 샘플로 클래스 균형 추정 증폭)
+            for idx in range(1, drone_samples_per_model + 1):
+                sim_data = self._run_single_simulation(scenario, "drone", "quadcopter", idx)
+                if len(sim_data["observations"]) >= 50:
+                    results.append(sim_data)
         
