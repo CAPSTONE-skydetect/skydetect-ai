@@ -157,3 +157,20 @@ class BatchRunner:
                 if len(sim_data["observations"]) >= 50:
                     results.append(sim_data)
         
+        # 6️. 데이터 대량 생산 완료 후 pkl 직렬화 물리 저장
+        output_path = os.path.join(self.output_dir, "batch_raw_trajectories.pkl")
+        with open(output_path, "wb") as f:
+            pickle.dump(results, f)
+
+        print("-" * 65)
+        print(f"✅ [Phase 1 완료] 클래스 균형 데이터셋 원천 생산 공정 완료.")
+        print(f" 총 저장된 유효 샘플 수: {len(results)} 개")
+        print(f" 바이너리 팩토리 파일 저장 완료 경로: {output_path}")
+        print("=" * 65)
+        return output_path
+
+if __name__ == "__main__":
+    # 정밀 명세 스펙 가동 (4 시나리오 × 조류종별 50개 / 드론 150개 = 1200개 Balanced 데이터 구축)
+    runner = BatchRunner(output_dir="data", fps=30)
+    runner.execute_batch_pipeline(bird_samples_per_species=50, drone_samples_per_model=150)
+        
