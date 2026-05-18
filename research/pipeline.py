@@ -20,7 +20,7 @@ class BatchRunner:
         # 저장 디렉토리 자동 생성
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def _run_single_simulation(self, scenario: str, agent_type: str, sub_types: str, sample_idx: int) -> dict:
+    def _run_single_simulation(self, scenario: str, agent_type: str, sub_type: str, sample_idx: int) -> dict:
         """
         단일 비행 시퀀스를 물리 엔진 상에서 가동 & 2D 가상 카메라 관측 데이터를 추출
         """
@@ -32,5 +32,34 @@ class BatchRunner:
 
         unique_seed = (sample_idx * 10000) + (agent_map[agent_type] * 100) + (scenario_map[scenario] * 10) + sub_map[sub_type]
         np.random.seed(unique_seed)
+
+        # 2️. 시나리오별 맞춤형 환경 변수(가변 변수) 세분화 설정
+        base_goal = [300.0, 50.0, 50.0]  # 기본 목적지 공간 좌표
+        start_pos = [0.0, np.random.uniform(75.0, 85.0), np.random.uniform(95.0, 105.0)]
+        start_speed = np.random.uniform(10.0, 14.0)
+
+        if scenario == "steady_cruise":
+            # 시나리오 A: 낮은 풍속과 안정적인 직선 기조 유도
+            wind_speed = np.random.uniform(1.0, 3.0)
+            gust_intensity = np.random.uniform(0.1, 0.3)
+            goal_pos = [base_goal[0] + np.random.uniform(-10, 10), base_goal[1], base_goal[2]]
+
+        elif scenario == "sudden_dash":
+            # 시나리오 B: 중간 풍속 및 전방 대시 기동 유도
+            wind_speed = np.random.uniform(2.0, 5.0)
+            gust_intensity = np.random.uniform(0.2, 0.4)
+            goal_pos = base_goal.copy()
+
+        elif scenario == "sharp_turns":
+            # 시나리오 C: 강력한 측풍 외란 및 지그재그 회전 유도
+            wind_speed = np.random.uniform(5.0, 8.0)  # 논문 기준 강풍 조건
+            gust_intensity = np.random.uniform(0.6, 0.9)
+            goal_pos = base_goal.copy()
+
+        elif scenario == "multi_mode":
+            # 시나리오 D: 복합 모드 비행 환경 세팅
+            wind_speed = np.random.uniform(2.0, 6.0)
+            gust_intensity = np.random.uniform(0.3, 0.6)
+            goal_pos = base_goal.copy()
 
         
