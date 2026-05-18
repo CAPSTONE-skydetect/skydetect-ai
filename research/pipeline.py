@@ -9,7 +9,7 @@ from generators import Environment, BirdDyn, DroneDyn
 
 # 전영 물리 한계 상수 선언
 V_MIN = 0.0
-V_MAX = 4.0
+V_MAX = 5.0
 H_MIN = 0.0
 H_MAX = 1.0
 
