@@ -1,7 +1,9 @@
 import os
 import pickle
 import numpy as np
+import pandas as pd
 from datetime import datetime
+from scipy.stats import circmean
 
 from generators import Environment, BirdDyn, DroneDyn
 
@@ -169,8 +171,117 @@ class BatchRunner:
         print("=" * 65)
         return output_path
 
+class CoreFeatureExtractor:
+    def __init__(self, data_dir: str):
+        """
+        :param data_dir: pkl 파일이 있고 최종 csv 파일이 생성될 디렉토리 경로
+        """
+        self.data_dir = data_dir
+        self.input_path = os.path.join(data_dir, "batch_raw_trajectories.pkl")
+        self.output_path = os.path.join(data_dir, "simulation_features.csv")
+
+    def extract_features(self) -> str:
+        if not os.path.exists(self.input_path):
+            raise FileNotFoundError(f"원천 시계열 바이너리가 {self.input_path}에 존재하지 않습니다.")
+
+        print("=" * 65)
+        print("[Phase 2] 물리/동역학 논문 기반 핵심 특징 추출(Feature Engineering) 시작")
+        print("=" * 65)
+
+        with open(self.input_path, "rb") as f:
+            raw_datasets = pickle.load(f)
+
+        feature_rows = []
+
+        for sample in raw_datasets:
+            obs = sample["observations"]
+            label = sample["metadata"]["label"]
+            dt = 1.0 / sample["metadata"]["fps"]
+            N = len(obs)
+
+            # 초해상도 및 미분 연산 한계선 방어벽
+            if N < 3:
+                continue
+
+            # 벡터 연산 속도 향상을 위한 데이터 배열 변환
+            cx = np.array([p["cx"] for p in obs])
+            cy = np.array([p["cy"] for p in obs])
+            w = np.array([p["w"] for p in obs])
+
+            # 1️. [수식 적용] 순간 변위 및 신체 길이 정규화 속도(v_norm) 계산
+            dx = np.diff(cx)
+            dy = np.diff(cy)
+            displacement = np.sqrt(dx**2 + dy**2)
+            
+            # 원근 왜곡 제거를 위해 프레임의 몸길이(w)로 나눈 후 속도로 환산 (BL/s)
+            v_norm_series = displacement / (w[1:] * dt + 1e-6)
+            
+            v_mean = float(np.mean(v_norm_series))
+            v_std = float(np.std(v_norm_series))
+
+            # 2️. [수식 적용] 정규화 속도의 시간에 대한 1차 미분 (가속도 a_mean)
+            a_norm_series = np.abs(np.diff(v_norm_series)) / dt
+            a_mean = float(np.mean(a_norm_series))
+
+            # 3️. [수식 적용] 3번 논문 식 (3),(4) 360도 경계면 보정 방향 편차(heading_change_ratio) 정밀 산출
+            headings = np.degrees(np.arctan2(dy, dx))
+            headings = (headings + 360) % 360  # 0~360도로 변환 및 스케일 바인딩
+            
+            # 원형 통계학을 적용한 순환 평균 방향 획득
+            h_mean = circmean(headings, high=360, low=0)
+            
+            delta_h_list = []
+            for h_i in headings:
+                diff = abs(h_i - h_mean)
+                if diff <= 90.0:
+                    delta_h = diff ** 2
+                else:
+                    delta_h = (diff - 360) ** 2
+                delta_h_list.append(delta_h)
+            
+            heading_change_ratio = float(np.sqrt(np.sum(delta_h_list) / len(headings)))
+
+            # 일차적인 파생 변수 로우 적재 (maneuverability_sigma 계산 전 임시 풀링)
+            feature_rows.append({
+                "v_mean": v_mean,
+                "v_std": v_std,
+                "a_mean": a_mean,
+                "heading_change_ratio": heading_change_ratio,
+                "label": label
+            })
+
+        df = pd.DataFrame(feature_rows)
+
+        # 4️. [수식 적용] 복합 기동성 지표 (maneuverability_sigma) 글로벌 풀 기반 정규화 산출
+        v_min, v_max = df["v_mean"].min(), df["v_mean"].max()
+        h_min, h_max = df["heading_change_ratio"].min(), df["heading_change_ratio"].max()
+
+        v_scaled = (df["v_mean"] - v_min) / (v_max - v_min + 1e-6)
+        h_scaled = (df["heading_change_ratio"] - h_min) / (h_max - h_min + 1e-6)
+
+        df["maneuverability_sigma"] = v_scaled / (h_scaled + 1e-6)
+
+        # 5️. C파트 담당자의 RandomForest 주입 변수 리스트 컬럼 명세 정렬 동기화
+        ordered_columns = ["v_mean", "v_std", "a_mean", "heading_change_ratio", "maneuverability_sigma", "label"]
+        df = df[ordered_columns]
+
+        # 물리 데이터 저장 발행
+        df.to_csv(self.output_path, index=False)
+        print(f"✅ [Phase 2 완료] CSV 피처 매트릭스 테이블 발행 완료.")
+        print(f"저장 경로: {self.output_path}")
+        print("=" * 65)
+        return self.output_path
+
 if __name__ == "__main__":
+
+    # 실행 환경에 구애받지 않는 안정적인 절대 경로 기저 동적 바인딩
+    current_script_dir = os.path.dirname(os.path.abspath(__file__))
+    target_data_dir = os.path.join(current_script_dir, "data")
+
     # 정밀 명세 스펙 가동 (4 시나리오 × 조류종별 50개 / 드론 150개 = 1200개 Balanced 데이터 구축)
-    runner = BatchRunner(output_dir="data", fps=30)
+    runner = BatchRunner(output_dir=target_data_dir, fps=30)
     runner.execute_batch_pipeline(bird_samples_per_species=50, drone_samples_per_model=150)
-        
+    
+    # 논문 기반 피처 엔지니어링 수행 (.csv)
+    extractor = CoreFeatureExtractor(data_dir=target_data_dir)
+    extractor.extract_features()
