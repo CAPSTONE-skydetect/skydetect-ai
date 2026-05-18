@@ -62,4 +62,11 @@ class BatchRunner:
             gust_intensity = np.random.uniform(0.3, 0.6)
             goal_pos = base_goal.copy()
 
+        # 3️. 환경 및 역학 에이전트 인스턴스화
+        env = Environment(fps=self.fps, wind_speed=wind_speed, gust_intensity=gust_intensity, goal_pos=goal_pos)
+        
+        if agent_type == "bird":
+            agent = BirdDyn(env, species=sub_type, start_pos=start_pos, start_speed=start_speed)
+        else:
+            agent = DroneDyn(env, model=sub_type, start_pos=start_pos, start_speed=start_speed)
         
