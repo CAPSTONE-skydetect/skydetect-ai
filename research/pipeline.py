@@ -115,4 +115,14 @@ class BatchRunner:
             # 물리 모델 1스텝 구동 (3D 좌표 변위 계산)
             agent.step()
 
+            # 5️⃣ Early Stopping 예외 제어 (지면 추락 검사)
+            if agent.pos[2] <= 0:
+                break
+
+            # 2D 관측 데이터 슬라이싱 투영 및 기록
+            obs = agent.get_observation(frame_index=frame)
+            sim_entry["observations"].append(obs)
+
+        return sim_entry
+
         
