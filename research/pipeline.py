@@ -70,3 +70,49 @@ class BatchRunner:
         else:
             agent = DroneDyn(env, model=sub_type, start_pos=start_pos, start_speed=start_speed)
         
+        # 설계서 명세 규격에 맞춘 계층 구조 사전 정의
+        sample_id = f"{sub_type}_{scenario}_{sample_idx:03d}"
+        sim_entry = {
+            "metadata": {
+                "sample_id": sample_id,
+                "label": "bird" if agent_type == "bird" else "drone",
+                "scenario": scenario,
+                "wind_speed": round(wind_speed, 2),
+                "fps": self.fps
+            },
+            "observations": []
+        }
+
+        # 4️. 내부 루프 (Sample Loop): 300 프레임 시뮬레이션 타임라인 제어
+        for frame in range(self.max_frames):
+            
+            # [시나리오 동적 제어 레이어 구현]
+            if scenario == "sudden_dash":
+                if frame == 100:
+                    # 목적지를 순식간에 전방으로 멀리 이동시켜 급가속(Dash) 유도
+                    env.x_goal[0] += 250.0
+                elif frame == 200:
+                    # 목적지를 기체 바로 뒤쪽으로 배치하여 급브레이크(Braking) 기동 강제
+                    env.x_goal = agent.pos - (agent.u * 60.0)
+
+            elif scenario == "sharp_turns":
+                # 지그재그 및 연속적인 예각 선회 유도 (슬라롬 기동)
+                if frame == 60:
+                    env.x_goal = np.array([agent.pos[0] + 50.0, 180.0, 90.0])
+                elif frame == 140:
+                    env.x_goal = np.array([agent.pos[0] + 50.0, -80.0, 40.0])
+                elif frame == 220:
+                    env.x_goal = np.array([agent.pos[0] + 80.0, 50.0, 60.0])
+
+            elif scenario == "multi_mode":
+                # 임무 기반 다중 모드: 100~180 프레임 구간 동안 목적지를 현재 위치로 고정하여
+                # 드론에게는 호버링(Hovering)을, 새에게는 제자리 선회(Circling) 루프 유도
+                if 100 <= frame <= 180:
+                    env.x_goal = agent.pos.copy()
+                elif frame == 181:
+                    env.x_goal = np.array([base_goal[0] + 150.0, base_goal[1], base_goal[2]])
+
+            # 물리 모델 1스텝 구동 (3D 좌표 변위 계산)
+            agent.step()
+
+        
