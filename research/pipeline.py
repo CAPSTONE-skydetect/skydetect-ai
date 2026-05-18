@@ -7,6 +7,12 @@ from scipy.stats import circmean
 
 from generators import Environment, BirdDyn, DroneDyn
 
+# 전영 물리 한계 상수 선언
+V_MIN = 0.0
+V_MAX = 4.0
+H_MIN = 0.0
+H_MAX = 1.0
+
 class BatchRunner:
     def __init__(self, output_dir: str = "data", fps: int = 30):
         """
@@ -33,35 +39,36 @@ class BatchRunner:
         sub_map = {"pigeon": 1, "seagull": 2, "falcon": 3, "quadcopter": 4}
 
         unique_seed = (sample_idx * 10000) + (agent_map[agent_type] * 100) + (scenario_map[scenario] * 10) + sub_map[sub_type]
-        np.random.seed(unique_seed)
+
+        rng = np.random.default_rng(unique_seed)
 
         # 2️. 시나리오별 맞춤형 환경 변수(가변 변수) 세분화 설정
         base_goal = [300.0, 50.0, 50.0]  # 기본 목적지 공간 좌표
-        start_pos = [0.0, np.random.uniform(75.0, 85.0), np.random.uniform(95.0, 105.0)]
-        start_speed = np.random.uniform(10.0, 14.0)
+        start_pos = [0.0, rng.uniform(75.0, 85.0), rng.uniform(95.0, 105.0)]
+        start_speed = rng.uniform(10.0, 14.0)
 
         if scenario == "steady_cruise":
             # 시나리오 A: 낮은 풍속과 안정적인 직선 기조 유도
-            wind_speed = np.random.uniform(1.0, 3.0)
-            gust_intensity = np.random.uniform(0.1, 0.3)
-            goal_pos = [base_goal[0] + np.random.uniform(-10, 10), base_goal[1], base_goal[2]]
+            wind_speed = rng.uniform(1.0, 3.0)
+            gust_intensity = rng.uniform(0.1, 0.3)
+            goal_pos = [base_goal[0] + rng.uniform(-10, 10), base_goal[1], base_goal[2]]
 
         elif scenario == "sudden_dash":
             # 시나리오 B: 중간 풍속 및 전방 대시 기동 유도
-            wind_speed = np.random.uniform(2.0, 5.0)
-            gust_intensity = np.random.uniform(0.2, 0.4)
+            wind_speed = rng.uniform(2.0, 5.0)
+            gust_intensity = rng.uniform(0.2, 0.4)
             goal_pos = base_goal.copy()
 
         elif scenario == "sharp_turns":
             # 시나리오 C: 강력한 측풍 외란 및 지그재그 회전 유도
-            wind_speed = np.random.uniform(5.0, 8.0)  # 논문 기준 강풍 조건
-            gust_intensity = np.random.uniform(0.6, 0.9)
+            wind_speed = rng.uniform(5.0, 8.0)  # 논문 기준 강풍 조건
+            gust_intensity = rng.uniform(0.6, 0.9)
             goal_pos = base_goal.copy()
 
         elif scenario == "multi_mode":
             # 시나리오 D: 복합 모드 비행 환경 세팅
-            wind_speed = np.random.uniform(2.0, 6.0)
-            gust_intensity = np.random.uniform(0.3, 0.6)
+            wind_speed = rng.uniform(2.0, 6.0)
+            gust_intensity = rng.uniform(0.3, 0.6)
             goal_pos = base_goal.copy()
 
         # 3️. 환경 및 역학 에이전트 인스턴스화
@@ -117,7 +124,7 @@ class BatchRunner:
             # 물리 모델 1스텝 구동 (3D 좌표 변위 계산)
             agent.step()
 
-            # 5️⃣ Early Stopping 예외 제어 (지면 추락 검사)
+            # 5️. Early Stopping 예외 제어 (지면 추락 검사)
             if agent.pos[2] <= 0:
                 break
 
@@ -147,17 +154,25 @@ class BatchRunner:
             
             # 내부 루프 1: 조류 군집 데이터 획득 (시나리오당 종별 50개 샘플)
             for species in birds:
-                for idx in range(1, bird_samples_per_species + 1):
+                valid_count = 0
+                idx = 1
+                while valid_count < bird_samples_per_species:
                     sim_data = self._run_single_simulation(scenario, "bird", species, idx)
                     # 데이터 유효 품질 방어벽 (최소 50프레임 이상 비행한 데이터만 인정)
-                    if len(sim_data["observations"]) >= 50:
+                    if len(sim_data["observations"]) >= 150:
                         results.append(sim_data)
+                        valid_count += 1
+                    idx += 1
 
             # 내부 루프 2: 드론 군집 데이터 획득 (시나리오당 150개 샘플로 클래스 균형 추정 증폭)
-            for idx in range(1, drone_samples_per_model + 1):
+            valid_count = 0
+            idx = 1
+            while valid_count < drone_samples_per_model:
                 sim_data = self._run_single_simulation(scenario, "drone", "quadcopter", idx)
-                if len(sim_data["observations"]) >= 50:
+                if len(sim_data["observations"]) >= 150:
                     results.append(sim_data)
+                    valid_count += 1
+                idx += 1
         
         # 6️. 데이터 대량 생산 완료 후 pkl 직렬화 물리 저장
         output_path = os.path.join(self.output_dir, "batch_raw_trajectories.pkl")
@@ -233,13 +248,14 @@ class CoreFeatureExtractor:
             delta_h_list = []
             for h_i in headings:
                 diff = abs(h_i - h_mean)
-                if diff <= 90.0:
-                    delta_h = diff ** 2
-                else:
-                    delta_h = (diff - 360) ** 2
-                delta_h_list.append(delta_h)
+                # 원형 공간 최단 기하 거리를 도출하는 수학적 공식 적용
+                shortest_diff = min(diff, 360.0 - diff)
+                delta_h_list.append(shortest_diff ** 2)
             
-            heading_change_ratio = float(np.sqrt(np.sum(delta_h_list) / len(headings)))
+            raw_h_std = np.sqrt(np.sum(delta_h_list) / len(headings))
+            
+            # 최대 편차 한계(180도)로 나눠 shared schema 규격 (0.0~1.0 ratio)에 동기화
+            heading_change_ratio = float(raw_h_std / 180.0)
 
             # 일차적인 파생 변수 로우 적재 (maneuverability_sigma 계산 전 임시 풀링)
             feature_rows.append({
@@ -253,11 +269,8 @@ class CoreFeatureExtractor:
         df = pd.DataFrame(feature_rows)
 
         # 4️. [수식 적용] 복합 기동성 지표 (maneuverability_sigma) 글로벌 풀 기반 정규화 산출
-        v_min, v_max = df["v_mean"].min(), df["v_mean"].max()
-        h_min, h_max = df["heading_change_ratio"].min(), df["heading_change_ratio"].max()
-
-        v_scaled = (df["v_mean"] - v_min) / (v_max - v_min + 1e-6)
-        h_scaled = (df["heading_change_ratio"] - h_min) / (h_max - h_min + 1e-6)
+        v_scaled = (df["v_mean"] - V_MIN) / (V_MAX - V_MIN + 1e-6)
+        h_scaled = (df["heading_change_ratio"] - H_MIN) / (H_MAX - H_MIN + 1e-6)
 
         df["maneuverability_sigma"] = v_scaled / (h_scaled + 1e-6)
 
