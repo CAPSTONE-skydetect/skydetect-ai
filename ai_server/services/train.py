@@ -1,9 +1,11 @@
 """Part C: RF 분류기 학습 스크립트."""
 
 import os
+from pathlib import Path
 
 import joblib
 import numpy as np
+import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
@@ -16,47 +18,37 @@ _FEATURE_NAMES = [
 ]
 
 _DEFAULT_MODEL_PATH = "models/rf_classifier.pkl"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_DATA_PATH = str(_PROJECT_ROOT / "data" / "simulation_features.csv")
 
 
 def _generate_simulation_data(
-    n_samples: int = 500,
-    random_state: int = 42,
+    file_path: str = _DEFAULT_DATA_PATH,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """bird/drone 시뮬레이션 학습 데이터 생성.
+    """bird/drone 시뮬레이션 결과에서 추출된 실제 특징 데이터셋 로드.
 
-    B파트 TrajectoryGenerator(PR #8) merge 전 임시 구현.
-    실제 데이터셋으로 교체 시 이 함수만 수정하면 된다.
+    B파트 Phase 2 추출 완료 데이터 적용.
     """
-    rng = np.random.default_rng(random_state)
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(
+            f"실제 시뮬레이션 데이터셋이 {file_path} 경로에 없습니다. "
+            f"B파트 생성 파일을 먼저 배치해주세요."
+        )
 
-    # bird: 빠르고 불규칙한 움직임
-    bird = np.column_stack([
-        rng.uniform(10.0, 25.0, n_samples),   # v_mean
-        rng.uniform(1.5, 5.0, n_samples),     # v_std
-        rng.uniform(0.5, 2.0, n_samples),     # a_mean
-        rng.uniform(0.3, 0.7, n_samples),     # heading_change_ratio
-        rng.uniform(5.0, 20.0, n_samples),    # maneuverability_sigma
-    ])
-
-    # drone: 일정하고 안정적인 움직임
-    drone = np.column_stack([
-        rng.uniform(5.0, 15.0, n_samples),    # v_mean
-        rng.uniform(0.1, 1.0, n_samples),     # v_std
-        rng.uniform(0.0, 0.5, n_samples),     # a_mean
-        rng.uniform(0.0, 0.2, n_samples),     # heading_change_ratio
-        rng.uniform(0.0, 5.0, n_samples),     # maneuverability_sigma
-    ])
-
-    X = np.vstack([bird, drone])
-    y = np.array(["bird"] * n_samples + ["drone"] * n_samples)
+    df = pd.read_csv(file_path)
+    X = df[_FEATURE_NAMES].to_numpy()
+    y = df["label"].to_numpy()
     return X, y
 
 
-def train_and_save(output_path: str = _DEFAULT_MODEL_PATH) -> None:
+def train_and_save(
+    output_path: str = _DEFAULT_MODEL_PATH,
+    data_path: str = _DEFAULT_DATA_PATH,
+) -> None:
     """RF 분류기를 학습하고 pkl 파일로 저장한다."""
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    X, y = _generate_simulation_data()
+    X, y = _generate_simulation_data(data_path)
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
