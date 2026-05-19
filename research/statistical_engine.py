@@ -41,3 +41,37 @@ class StatisticalEngine :
         all_features_valid = True
         max_cohens_d = -1.0
         top_discriminant_feature = ""
+
+        # 2. 핵심 제어 로직 (Feature별 연산 루프)
+        for f_name in features:
+            b_data = bird_df[f_name].to_numpy()
+            d_data = drone_df[f_name].to_numpy()
+
+            # 기술 통계량 산출 (표본 표준편차 ddof=1 적용)
+            descriptive = {
+                "bird": {
+                    "mean": round(float(np.mean(b_data)), 4),
+                    "std": round(float(np.std(b_data, ddof=1)), 4),
+                    "min": round(float(np.min(b_data)), 4),
+                    "max": round(float(np.max(b_data)), 4)
+                },
+                "drone": {
+                    "mean": round(float(np.mean(d_data)), 4),
+                    "std": round(float(np.std(d_data, ddof=1)), 4),
+                    "min": round(float(np.min(d_data)), 4),
+                    "max": round(float(np.max(d_data)), 4)
+                }
+            }
+
+            # 독립표본 T-검정 (Welch's T-test, 이분산 가정)
+            t_stat, p_val = ttest_ind(b_data, d_data, equal_var=False)
+            
+            is_significant = bool(p_val < 0.05)
+            if not is_significant:
+                all_features_valid = False
+
+            hypothesis_test = {
+                "t_statistic": round(float(t_stat), 4) if not np.isnan(t_stat) else 0.0,
+                "p_value": float(p_val) if not np.isnan(p_val) else 1.0,
+                "is_significant": is_significant
+            }
