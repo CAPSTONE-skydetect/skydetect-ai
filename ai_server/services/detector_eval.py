@@ -133,6 +133,13 @@ class DetectorAdapter(Protocol):
         """Yield frame-wise detections for the supplied video frames."""
 
 
+@dataclass(frozen=True)
+class DetectionArtifact:
+    source_video_id: str
+    detector_name: str
+    frame_detections: list[FrameDetections]
+
+
 @dataclass
 class UltralyticsYOLOAdapter:
     """Baseline YOLO detector adapter, loaded lazily to keep dependencies optional."""
@@ -526,24 +533,32 @@ def write_detection_json(
 
 
 def read_detection_json(path: Path) -> list[FrameDetections]:
+    return read_detection_artifact(path).frame_detections
+
+
+def read_detection_artifact(path: Path) -> DetectionArtifact:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return [
-        FrameDetections(
-            frame_index=int(frame["frame_index"]),
-            timestamp_ms=int(frame["timestamp_ms"]),
-            detections=[
-                Detection(
-                    left=int(detection["left"]),
-                    top=int(detection["top"]),
-                    width=int(detection["width"]),
-                    height=int(detection["height"]),
-                    confidence=float(detection["confidence"]),
-                )
-                for detection in frame["detections"]
-            ],
-        )
-        for frame in payload["frames"]
-    ]
+    return DetectionArtifact(
+        source_video_id=str(payload["source_video_id"]),
+        detector_name=str(payload["detector"]),
+        frame_detections=[
+            FrameDetections(
+                frame_index=int(frame["frame_index"]),
+                timestamp_ms=int(frame["timestamp_ms"]),
+                detections=[
+                    Detection(
+                        left=int(detection["left"]),
+                        top=int(detection["top"]),
+                        width=int(detection["width"]),
+                        height=int(detection["height"]),
+                        confidence=float(detection["confidence"]),
+                    )
+                    for detection in frame["detections"]
+                ],
+            )
+            for frame in payload["frames"]
+        ],
+    )
 
 
 def detection_gap_stats(frame_detections: Sequence[FrameDetections]) -> dict[str, int | float]:

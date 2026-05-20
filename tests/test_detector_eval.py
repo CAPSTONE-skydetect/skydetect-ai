@@ -6,15 +6,23 @@ import pytest
 from ai_server.schemas import StabilizationInfo
 from ai_server.services.detector import Detection, FrameDetections
 from ai_server.services.detector_eval import (
+    DetectionArtifact,
     DEFAULT_VIDEO_CASES,
     build_tracks_for_tracker,
     detection_gap_stats,
+    read_detection_artifact,
     read_detection_json,
     summarize_run,
     write_detection_json,
 )
 from ai_server.services.video_io import VideoMetadata
-from scripts.run_detector_eval import _conf_suffix, _select_cases, _start_suffix
+from scripts.run_detector_eval import (
+    _conf_suffix,
+    _select_cases,
+    _stabilization_for_source_id,
+    _start_sec_for_source_id,
+    _start_suffix,
+)
 
 
 def _metadata() -> VideoMetadata:
@@ -61,6 +69,28 @@ def test_detection_json_round_trip(tmp_path: Path) -> None:
 
     restored = read_detection_json(output_path)
     assert restored == frame_detections
+
+
+def test_detection_artifact_round_trip_includes_source_metadata(tmp_path: Path) -> None:
+    frame_detections = [
+        _frame(0, [Detection(left=10, top=20, width=5, height=6, confidence=0.7)]),
+    ]
+    output_path = tmp_path / "detections.json"
+
+    write_detection_json(
+        output_path,
+        source_video_id="video_01__none__yolomg__conf020",
+        detector_name="yolomg",
+        frame_detections=frame_detections,
+    )
+
+    restored = read_detection_artifact(output_path)
+
+    assert restored == DetectionArtifact(
+        source_video_id="video_01__none__yolomg__conf020",
+        detector_name="yolomg",
+        frame_detections=frame_detections,
+    )
 
 
 def test_detection_gap_stats_counts_gap_and_detection_runs() -> None:
@@ -290,3 +320,12 @@ def test_conf_suffix_uses_three_digit_percent_format() -> None:
     assert _conf_suffix(0.05) == "__conf005"
     assert _conf_suffix(0.2) == "__conf020"
     assert _conf_suffix(0.45) == "__conf045"
+
+
+def test_source_id_helpers_parse_reused_detection_context() -> None:
+    source_video_id = "drone_fix_stab_far_01__start_4s__ffmpeg_vidstab__yolomg__conf020"
+
+    assert _start_sec_for_source_id(source_video_id) == 4.0
+    stabilization = _stabilization_for_source_id(source_video_id)
+    assert stabilization.applied is True
+    assert stabilization.method == "ffmpeg_vidstab"

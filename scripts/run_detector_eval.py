@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
 import sys
 from traceback import format_exception_only
 
@@ -12,6 +13,7 @@ from ai_server.services.detector_eval import (
     DEFAULT_DATASET_DIR,
     DEFAULT_OUTPUT_ROOT,
     DEFAULT_VIDEO_CASES,
+    DetectionArtifact,
     DetectorAdapter,
     OpenCVMotionDebugAdapter,
     UltralyticsYOLOAdapter,
@@ -20,6 +22,7 @@ from ai_server.services.detector_eval import (
     build_tracks_for_tracker,
     iter_limited_video_frames,
     max_frames_for_case,
+    read_detection_artifact,
     sanitize_id,
     summarize_failure,
     summarize_run,
@@ -42,9 +45,19 @@ def main() -> int:
     manifest = build_manifest(dataset_dir=dataset_dir)
     write_json(output_root / "manifest.json", manifest)
 
+    if args.reuse_detections:
+        rows = _run_reused_detections(
+            args=args,
+            dataset_dir=dataset_dir,
+            output_root=output_root,
+        )
+        summary_path = output_root / "summary.csv"
+        write_summary_csv(summary_path, rows)
+        _print_done(output_root, summary_path, rows)
+        return 0 if any(row["status"] == "ok" for row in rows) else 1
+
     detectors = _build_detectors(args)
     rows: list[dict[str, object]] = []
-
     cases = _select_cases(args)
     for case in cases:
         input_path = case.path(dataset_dir)
@@ -264,6 +277,14 @@ def _parse_args() -> argparse.Namespace:
         dest="video_ids",
         help="Optional video_id to run. Repeat the flag to target multiple specific cases.",
     )
+    parser.add_argument(
+        "--reuse-detections",
+        nargs="+",
+        help=(
+            "Detection JSON file(s) or directories to reuse for tracker-only runs. "
+            "Detector inference and stabilization are skipped."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -283,6 +304,123 @@ def _select_cases(args: argparse.Namespace):
     if args.case_limit:
         return list(DEFAULT_VIDEO_CASES[: args.case_limit])
     return list(DEFAULT_VIDEO_CASES)
+
+
+def _run_reused_detections(
+    *,
+    args: argparse.Namespace,
+    dataset_dir: Path,
+    output_root: Path,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    case_by_id = {case.video_id: case for case in DEFAULT_VIDEO_CASES}
+    for detection_path in _iter_reuse_detection_paths(args.reuse_detections):
+        try:
+            artifact = read_detection_artifact(detection_path)
+            case = _case_for_detection_artifact(artifact, case_by_id)
+            input_path = case.path(dataset_dir)
+            if not input_path.exists():
+                raise FileNotFoundError(f"Video file does not exist: {input_path}")
+            metadata = load_video_metadata(str(input_path))
+            stabilization = _stabilization_for_source_id(artifact.source_video_id)
+            start_sec = _start_sec_for_source_id(artifact.source_video_id)
+            for tracker_name in args.trackers:
+                run_key = sanitize_id(f"{artifact.source_video_id}__{tracker_name}")
+                tracks = build_tracks_for_tracker(
+                    tracker_name=tracker_name,
+                    frame_detections=artifact.frame_detections,
+                    metadata=metadata,
+                    source_video_id=run_key,
+                    stabilization=stabilization,
+                )
+                write_tracks_json(output_root / "tracks" / f"{run_key}.json", tracks)
+                if not args.skip_viz:
+                    write_track_visualization(
+                        input_video_path=str(input_path),
+                        output_video_path=output_root / "viz" / f"{run_key}.mp4",
+                        tracks=tracks,
+                        max_frames=len(artifact.frame_detections),
+                        start_sec=start_sec,
+                    )
+                rows.append(
+                    summarize_run(
+                        case=case,
+                        detector_name=artifact.detector_name,
+                        tracker_name=tracker_name,
+                        stabilization=stabilization,
+                        frame_detections=artifact.frame_detections,
+                        tracks=tracks,
+                        start_sec=start_sec,
+                    )
+                )
+        except Exception as exc:
+            rows.extend(
+                _failure_rows_for_reused_detection(
+                    detection_path=detection_path,
+                    trackers=args.trackers,
+                    error=_short_error(exc),
+                )
+            )
+    return rows
+
+
+def _iter_reuse_detection_paths(values: list[str]):
+    for value in values:
+        path = Path(value).expanduser()
+        if path.is_dir():
+            yield from sorted(path.rglob("*.json"))
+        else:
+            yield path
+
+
+def _case_for_detection_artifact(
+    artifact: DetectionArtifact,
+    case_by_id,
+):
+    matches = [
+        case
+        for video_id, case in case_by_id.items()
+        if artifact.source_video_id.startswith(video_id)
+    ]
+    if not matches:
+        raise ValueError(
+            f"Could not infer video case from detection source: {artifact.source_video_id}"
+        )
+    return max(matches, key=lambda case: len(case.video_id))
+
+
+def _stabilization_for_source_id(source_video_id: str) -> StabilizationInfo:
+    for method in ("ffmpeg_vidstab", "none"):
+        if f"__{method}__" in source_video_id:
+            return StabilizationInfo(applied=method != "none", method=method)
+    return StabilizationInfo(applied=False, method="none")
+
+
+def _start_sec_for_source_id(source_video_id: str) -> float:
+    match = re.search(r"__start_([0-9.]+)s(?:__|$)", source_video_id)
+    if not match:
+        return 0.0
+    return float(match.group(1))
+
+
+def _failure_rows_for_reused_detection(
+    *,
+    detection_path: Path,
+    trackers: list[str],
+    error: str,
+) -> list[dict[str, object]]:
+    fallback_case = DEFAULT_VIDEO_CASES[0]
+    stabilization = StabilizationInfo(applied=False, method="none")
+    return [
+        summarize_failure(
+            case=fallback_case,
+            detector_name=f"reuse:{detection_path.name}",
+            tracker_name=tracker,
+            stabilization=stabilization,
+            error=error,
+        )
+        for tracker in trackers
+    ]
 
 
 def _build_detectors(args: argparse.Namespace) -> list[DetectorAdapter]:
