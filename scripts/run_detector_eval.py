@@ -90,7 +90,7 @@ def main() -> int:
 
             for detector in detectors:
                 run_key_base = sanitize_id(
-                    f"{case.video_id}{_start_suffix(args.start_sec)}__{method}__{detector.name}"
+                    f"{case.video_id}{_start_suffix(args.start_sec)}__{method}__{detector.name}{_conf_suffix(args.conf)}"
                 )
                 try:
                     frames = iter_limited_video_frames(
@@ -196,7 +196,13 @@ def _parse_args() -> argparse.Namespace:
         "--trackers",
         nargs="+",
         default=["nn", "sort"],
-        choices=["nn", "sort"],
+        choices=[
+            "nn",
+            "sort",
+            "sort_long_memory",
+            "sort_center",
+            "upper_bound",
+        ],
         help="Tracker adapters to run.",
     )
     parser.add_argument(
@@ -342,6 +348,10 @@ def _start_suffix(start_sec: float) -> str:
     if start_sec <= 0:
         return ""
     return f"__start_{start_sec:g}s"
+
+
+def _conf_suffix(confidence_threshold: float) -> str:
+    return f"__conf{round(confidence_threshold * 100):03d}"
 
 
 def _print_done(output_root: Path, summary_path: Path, rows: list[dict[str, object]]) -> None:

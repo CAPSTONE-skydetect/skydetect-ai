@@ -476,7 +476,13 @@ def build_manifest(
         "dataset_dir": str(dataset_dir),
         "videos": videos,
         "default_detectors": ["yolomg", "baseline"],
-        "default_trackers": ["nn", "sort"],
+        "default_trackers": [
+            "nn",
+            "sort",
+            "sort_long_memory",
+            "sort_center",
+            "upper_bound",
+        ],
         "default_stabilization_methods": ["none", "ffmpeg_vidstab"],
     }
 
@@ -622,6 +628,32 @@ def build_tracks_for_tracker(
             source_video_id=source_video_id,
             stabilization=stabilization,
         )
+    if tracker_name == "sort_long_memory":
+        return _build_sort_like_track_sequences(
+            frame_detections=frame_detections,
+            metadata=metadata,
+            source_video_id=source_video_id,
+            stabilization=stabilization,
+            max_age=30,
+        )
+    if tracker_name == "sort_center":
+        return _build_sort_like_track_sequences(
+            frame_detections=frame_detections,
+            metadata=metadata,
+            source_video_id=source_video_id,
+            stabilization=stabilization,
+            max_age=30,
+            match_strategy="center_distance",
+        )
+    if tracker_name == "upper_bound":
+        return _build_sort_like_track_sequences(
+            frame_detections=frame_detections,
+            metadata=metadata,
+            source_video_id=source_video_id,
+            stabilization=stabilization,
+            max_age=30,
+            match_strategy="single_detection_upper_bound",
+        )
     raise ValueError(f"Unknown tracker: {tracker_name}")
 
 
@@ -653,6 +685,8 @@ def _build_sort_like_track_sequences(
     *,
     max_age: int = 8,
     iou_threshold: float = 0.05,
+    center_distance_ratio: float = 0.04,
+    match_strategy: str = "iou",
 ) -> list[TrackSequence]:
     tracks: list[_SortTrackState] = []
     next_track_id = 1
@@ -664,12 +698,15 @@ def _build_sort_like_track_sequences(
             if frame.frame_index - track.last_frame_index <= max_age
         ]
         detections = list(frame.detections)
-        matches = _greedy_iou_matches(
+        matches = _match_sort_detections(
             tracks=tracks,
             active_indices=active_indices,
             detections=detections,
             frame_index=frame.frame_index,
+            metadata=metadata,
             iou_threshold=iou_threshold,
+            center_distance_ratio=center_distance_ratio,
+            match_strategy=match_strategy,
         )
         matched_detection_indices = {detection_index for _, detection_index in matches}
 
@@ -1162,6 +1199,94 @@ def _greedy_iou_matches(
     return matches
 
 
+def _match_sort_detections(
+    *,
+    tracks: Sequence[_SortTrackState],
+    active_indices: Sequence[int],
+    detections: Sequence[Detection],
+    frame_index: int,
+    metadata: VideoMetadata,
+    iou_threshold: float,
+    center_distance_ratio: float,
+    match_strategy: str,
+) -> list[tuple[int, int]]:
+    if match_strategy == "iou":
+        return _greedy_iou_matches(
+            tracks=tracks,
+            active_indices=active_indices,
+            detections=detections,
+            frame_index=frame_index,
+            iou_threshold=iou_threshold,
+        )
+    if match_strategy == "center_distance":
+        return _greedy_center_distance_matches(
+            tracks=tracks,
+            active_indices=active_indices,
+            detections=detections,
+            frame_index=frame_index,
+            max_distance_px=metadata.width * center_distance_ratio,
+        )
+    if match_strategy == "single_detection_upper_bound":
+        return _single_detection_upper_bound_matches(
+            tracks=tracks,
+            active_indices=active_indices,
+            detections=detections,
+        )
+    raise ValueError(f"Unknown SORT match strategy: {match_strategy}")
+
+
+def _greedy_center_distance_matches(
+    *,
+    tracks: Sequence[_SortTrackState],
+    active_indices: Sequence[int],
+    detections: Sequence[Detection],
+    frame_index: int,
+    max_distance_px: float,
+) -> list[tuple[int, int]]:
+    candidates: list[tuple[float, int, int]] = []
+    for track_index in active_indices:
+        predicted = tracks[track_index].predicted_bbox(frame_index)
+        predicted_center = (_center_x(predicted), _center_y(predicted))
+        for detection_index, detection in enumerate(detections):
+            detection_bbox = _bbox_from_detection(detection)
+            distance = _center_distance(
+                predicted_center,
+                (_center_x(detection_bbox), _center_y(detection_bbox)),
+            )
+            if distance <= max_distance_px:
+                candidates.append((-distance, track_index, detection_index))
+    candidates.sort(reverse=True)
+
+    matches: list[tuple[int, int]] = []
+    matched_tracks: set[int] = set()
+    matched_detections: set[int] = set()
+    for _negative_distance, track_index, detection_index in candidates:
+        if track_index in matched_tracks or detection_index in matched_detections:
+            continue
+        matches.append((track_index, detection_index))
+        matched_tracks.add(track_index)
+        matched_detections.add(detection_index)
+    return matches
+
+
+def _single_detection_upper_bound_matches(
+    *,
+    tracks: Sequence[_SortTrackState],
+    active_indices: Sequence[int],
+    detections: Sequence[Detection],
+) -> list[tuple[int, int]]:
+    if len(detections) != 1 or not active_indices:
+        return []
+    track_index = max(
+        active_indices,
+        key=lambda index: (
+            tracks[index].last_frame_index,
+            len(tracks[index].history),
+        ),
+    )
+    return [(track_index, 0)]
+
+
 def _track_point_from_detection(
     detection: Detection,
     frame_index: int,
@@ -1209,6 +1334,13 @@ def _center_x(bbox: tuple[int, int, int, int]) -> float:
 def _center_y(bbox: tuple[int, int, int, int]) -> float:
     _left, top, _width, height = bbox
     return top + (height / 2)
+
+
+def _center_distance(
+    first: tuple[float, float],
+    second: tuple[float, float],
+) -> float:
+    return ((first[0] - second[0]) ** 2 + (first[1] - second[1]) ** 2) ** 0.5
 
 
 def _boolean_run_lengths(values: Iterable[bool]) -> list[int]:

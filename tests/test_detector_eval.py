@@ -14,7 +14,7 @@ from ai_server.services.detector_eval import (
     write_detection_json,
 )
 from ai_server.services.video_io import VideoMetadata
-from scripts.run_detector_eval import _select_cases, _start_suffix
+from scripts.run_detector_eval import _conf_suffix, _select_cases, _start_suffix
 
 
 def _metadata() -> VideoMetadata:
@@ -23,6 +23,16 @@ def _metadata() -> VideoMetadata:
         fps=30.0,
         total_frames=4,
         width=100,
+        height=100,
+    )
+
+
+def _wide_metadata() -> VideoMetadata:
+    return VideoMetadata(
+        path="synthetic_wide.mp4",
+        fps=30.0,
+        total_frames=40,
+        width=1000,
         height=100,
     )
 
@@ -118,6 +128,84 @@ def test_sort_tracker_keeps_track_across_short_detection_gap() -> None:
     assert tracks[0].quality.missing_ratio == 0.333
 
 
+def test_sort_long_memory_keeps_track_across_long_detection_gap() -> None:
+    frame_detections = [
+        _frame(0, [Detection(left=10, top=10, width=8, height=8, confidence=0.8)]),
+        _frame(20, [Detection(left=10, top=10, width=8, height=8, confidence=0.8)]),
+    ]
+
+    sort_tracks = build_tracks_for_tracker(
+        tracker_name="sort",
+        frame_detections=frame_detections,
+        metadata=_metadata(),
+        source_video_id="synthetic_sort",
+        stabilization=StabilizationInfo(applied=False, method="none"),
+    )
+    long_memory_tracks = build_tracks_for_tracker(
+        tracker_name="sort_long_memory",
+        frame_detections=frame_detections,
+        metadata=_metadata(),
+        source_video_id="synthetic_sort_long_memory",
+        stabilization=StabilizationInfo(applied=False, method="none"),
+    )
+
+    assert len(sort_tracks) == 2
+    assert len(long_memory_tracks) == 1
+    assert [point.frame_index for point in long_memory_tracks[0].history] == [0, 20]
+
+
+def test_sort_center_matches_small_boxes_by_normalized_center_distance() -> None:
+    frame_detections = [
+        _frame(0, [Detection(left=10, top=10, width=4, height=4, confidence=0.8)]),
+        _frame(1, [Detection(left=30, top=10, width=4, height=4, confidence=0.8)]),
+    ]
+
+    sort_tracks = build_tracks_for_tracker(
+        tracker_name="sort",
+        frame_detections=frame_detections,
+        metadata=_wide_metadata(),
+        source_video_id="synthetic_sort",
+        stabilization=StabilizationInfo(applied=False, method="none"),
+    )
+    center_tracks = build_tracks_for_tracker(
+        tracker_name="sort_center",
+        frame_detections=frame_detections,
+        metadata=_wide_metadata(),
+        source_video_id="synthetic_sort_center",
+        stabilization=StabilizationInfo(applied=False, method="none"),
+    )
+
+    assert len(sort_tracks) == 2
+    assert len(center_tracks) == 1
+    assert [point.frame_index for point in center_tracks[0].history] == [0, 1]
+
+
+def test_upper_bound_links_single_detections_within_long_memory_window() -> None:
+    frame_detections = [
+        _frame(0, [Detection(left=10, top=10, width=4, height=4, confidence=0.8)]),
+        _frame(20, [Detection(left=400, top=10, width=4, height=4, confidence=0.8)]),
+    ]
+
+    long_memory_tracks = build_tracks_for_tracker(
+        tracker_name="sort_long_memory",
+        frame_detections=frame_detections,
+        metadata=_wide_metadata(),
+        source_video_id="synthetic_sort_long_memory",
+        stabilization=StabilizationInfo(applied=False, method="none"),
+    )
+    upper_bound_tracks = build_tracks_for_tracker(
+        tracker_name="upper_bound",
+        frame_detections=frame_detections,
+        metadata=_wide_metadata(),
+        source_video_id="synthetic_upper_bound",
+        stabilization=StabilizationInfo(applied=False, method="none"),
+    )
+
+    assert len(long_memory_tracks) == 2
+    assert len(upper_bound_tracks) == 1
+    assert [point.frame_index for point in upper_bound_tracks[0].history] == [0, 20]
+
+
 def test_summary_includes_detector_and_track_metrics() -> None:
     case = DEFAULT_VIDEO_CASES[0]
     frame_detections = [
@@ -196,3 +284,9 @@ def test_start_suffix_only_marks_offset_runs() -> None:
     assert _start_suffix(0.0) == ""
     assert _start_suffix(34.0) == "__start_34s"
     assert _start_suffix(33.5) == "__start_33.5s"
+
+
+def test_conf_suffix_uses_three_digit_percent_format() -> None:
+    assert _conf_suffix(0.05) == "__conf005"
+    assert _conf_suffix(0.2) == "__conf020"
+    assert _conf_suffix(0.45) == "__conf045"
