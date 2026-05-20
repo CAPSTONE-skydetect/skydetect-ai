@@ -146,9 +146,35 @@ def test_summary_includes_detector_and_track_metrics() -> None:
     assert row["tracker"] == "nn"
     assert row["detected_frame_ratio"] == 1.0
     assert row["detector_mean_conf"] == 0.7
+    assert row["num_detection_gaps"] == 0
+    assert row["max_detection_gap"] == 0
+    assert row["median_detection_gap"] == 0.0
+    assert row["mean_detection_gap"] == 0.0
+    assert row["detection_gap_p90"] == 0
+    assert row["longest_detection_run"] == 2
     assert row["track_count"] == 1
     assert row["main_track_num_points"] == 2
+    assert row["main_track_ratio_total"] == 1.0
+    assert row["main_track_ratio_recoverable"] == 1.0
     assert row["eval_start_sec"] == 0.0
+
+
+def test_summary_uses_zero_track_ratios_without_main_track() -> None:
+    row = summarize_run(
+        case=DEFAULT_VIDEO_CASES[0],
+        detector_name="yolomg",
+        tracker_name="sort",
+        stabilization=StabilizationInfo(applied=False, method="none"),
+        frame_detections=[
+            _frame(0, []),
+            _frame(1, [Detection(left=10, top=10, width=8, height=8, confidence=0.8)]),
+        ],
+        tracks=[],
+    )
+
+    assert row["main_track_num_points"] == 0
+    assert row["main_track_ratio_total"] == 0.0
+    assert row["main_track_ratio_recoverable"] == 0.0
 
 
 def test_select_cases_by_video_id_preserves_request_order() -> None:

@@ -745,6 +745,7 @@ def summarize_run(
         for frame in frame_detections
         for detection in frame.detections
     ]
+    gap_stats = detection_gap_stats(frame_detections)
     main_track = select_main_track(tracks)
     nontrivial_tracks = [
         track
@@ -776,6 +777,7 @@ def summarize_run(
         )
         if detection_confidences
         else 0.0,
+        **gap_stats,
         "track_count": len(tracks),
         "fragmentation_count": max(0, len(nontrivial_tracks) - 1),
         "obvious_false_positive_count_manual": "",
@@ -785,6 +787,8 @@ def summarize_run(
             {
                 "main_track_id": "",
                 "main_track_num_points": 0,
+                "main_track_ratio_total": 0.0,
+                "main_track_ratio_recoverable": 0.0,
                 "main_track_missing_ratio": 1.0,
                 "main_track_mean_conf": 0.0,
                 "main_track_stability": "poor",
@@ -792,10 +796,19 @@ def summarize_run(
         )
     else:
         quality = main_track.quality
+        main_track_points = quality.num_points
         row.update(
             {
                 "main_track_id": main_track.track_id,
-                "main_track_num_points": quality.num_points,
+                "main_track_num_points": main_track_points,
+                "main_track_ratio_total": _safe_round(main_track_points / total_frames)
+                if total_frames
+                else 0.0,
+                "main_track_ratio_recoverable": _safe_round(
+                    main_track_points / detected_frames
+                )
+                if detected_frames
+                else 0.0,
                 "main_track_missing_ratio": quality.missing_ratio,
                 "main_track_mean_conf": quality.mean_conf,
                 "main_track_stability": quality.track_stability,
