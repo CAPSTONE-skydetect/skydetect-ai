@@ -8,6 +8,7 @@ from ai_server.services.detector import Detection, FrameDetections
 from ai_server.services.detector_eval import (
     DEFAULT_VIDEO_CASES,
     build_tracks_for_tracker,
+    detection_gap_stats,
     read_detection_json,
     summarize_run,
     write_detection_json,
@@ -50,6 +51,50 @@ def test_detection_json_round_trip(tmp_path: Path) -> None:
 
     restored = read_detection_json(output_path)
     assert restored == frame_detections
+
+
+def test_detection_gap_stats_counts_gap_and_detection_runs() -> None:
+    detection = Detection(left=10, top=10, width=8, height=8, confidence=0.8)
+    frame_detections = [
+        _frame(0, []),
+        _frame(1, []),
+        _frame(2, [detection]),
+        _frame(3, [detection]),
+        _frame(4, [detection]),
+        _frame(5, []),
+        _frame(6, [detection]),
+        _frame(7, [detection]),
+        _frame(8, []),
+        _frame(9, []),
+        _frame(10, []),
+    ]
+
+    assert detection_gap_stats(frame_detections) == {
+        "num_detection_gaps": 3,
+        "max_detection_gap": 3,
+        "median_detection_gap": 2.0,
+        "mean_detection_gap": 2.0,
+        "detection_gap_p90": 3,
+        "longest_detection_run": 3,
+    }
+
+
+def test_detection_gap_stats_handles_all_detected_frames() -> None:
+    detection = Detection(left=10, top=10, width=8, height=8, confidence=0.8)
+    frame_detections = [
+        _frame(0, [detection]),
+        _frame(1, [detection]),
+        _frame(2, [detection]),
+    ]
+
+    assert detection_gap_stats(frame_detections) == {
+        "num_detection_gaps": 0,
+        "max_detection_gap": 0,
+        "median_detection_gap": 0.0,
+        "mean_detection_gap": 0.0,
+        "detection_gap_p90": 0,
+        "longest_detection_run": 3,
+    }
 
 
 def test_sort_tracker_keeps_track_across_short_detection_gap() -> None:

@@ -540,6 +540,24 @@ def read_detection_json(path: Path) -> list[FrameDetections]:
     ]
 
 
+def detection_gap_stats(frame_detections: Sequence[FrameDetections]) -> dict[str, int | float]:
+    gap_lengths = _boolean_run_lengths(
+        not bool(frame.detections) for frame in frame_detections
+    )
+    detection_run_lengths = _boolean_run_lengths(
+        bool(frame.detections) for frame in frame_detections
+    )
+
+    return {
+        "num_detection_gaps": len(gap_lengths),
+        "max_detection_gap": max(gap_lengths, default=0),
+        "median_detection_gap": _safe_round(_median(gap_lengths)),
+        "mean_detection_gap": _safe_round(_mean(gap_lengths)),
+        "detection_gap_p90": _percentile_nearest(gap_lengths, 0.90),
+        "longest_detection_run": max(detection_run_lengths, default=0),
+    }
+
+
 def write_tracks_json(path: Path, tracks: Sequence[TrackSequence]) -> None:
     write_json(
         path,
@@ -1178,6 +1196,45 @@ def _center_x(bbox: tuple[int, int, int, int]) -> float:
 def _center_y(bbox: tuple[int, int, int, int]) -> float:
     _left, top, _width, height = bbox
     return top + (height / 2)
+
+
+def _boolean_run_lengths(values: Iterable[bool]) -> list[int]:
+    lengths: list[int] = []
+    current_length = 0
+    for value in values:
+        if value:
+            current_length += 1
+            continue
+        if current_length:
+            lengths.append(current_length)
+            current_length = 0
+    if current_length:
+        lengths.append(current_length)
+    return lengths
+
+
+def _mean(values: Sequence[int]) -> float:
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
+
+
+def _median(values: Sequence[int]) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    middle = len(sorted_values) // 2
+    if len(sorted_values) % 2:
+        return float(sorted_values[middle])
+    return (sorted_values[middle - 1] + sorted_values[middle]) / 2
+
+
+def _percentile_nearest(values: Sequence[int], percentile: float) -> int:
+    if not values:
+        return 0
+    sorted_values = sorted(values)
+    index = round((len(sorted_values) - 1) * percentile)
+    return sorted_values[index]
 
 
 def _safe_round(value: float) -> float:
