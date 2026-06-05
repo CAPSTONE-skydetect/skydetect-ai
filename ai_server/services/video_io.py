@@ -52,12 +52,19 @@ def load_video_metadata(video_path: str) -> VideoMetadata:
     )
 
 
-def iter_video_frames(video_path: str) -> Iterator[VideoFrame]:
-    metadata = load_video_metadata(video_path)
+def iter_video_frames(
+    video_path: str,
+    *,
+    start_frame: int = 0,
+    metadata: VideoMetadata | None = None,
+) -> Iterator[VideoFrame]:
+    metadata = metadata or load_video_metadata(video_path)
     capture = _open_video_capture(video_path)
 
     try:
-        frame_index = 0
+        frame_index = max(0, start_frame)
+        if frame_index > 0:
+            capture.set(_cv2().CAP_PROP_POS_FRAMES, frame_index)
         while True:
             ok, frame = capture.read()
             if not ok:

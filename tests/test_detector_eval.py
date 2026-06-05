@@ -3,6 +3,7 @@ import argparse
 
 import pytest
 
+import ai_server.services.detector_eval as detector_eval
 from ai_server.schemas import StabilizationInfo
 from ai_server.services.detector import Detection, FrameDetections
 from ai_server.services.detector_eval import (
@@ -10,12 +11,13 @@ from ai_server.services.detector_eval import (
     DEFAULT_VIDEO_CASES,
     build_tracks_for_tracker,
     detection_gap_stats,
+    iter_limited_video_frames,
     read_detection_artifact,
     read_detection_json,
     summarize_run,
     write_detection_json,
 )
-from ai_server.services.video_io import VideoMetadata
+from ai_server.services.video_io import VideoFrame, VideoMetadata
 from scripts.run_detector_eval import (
     _conf_suffix,
     _select_cases,
@@ -234,6 +236,74 @@ def test_upper_bound_links_single_detections_within_long_memory_window() -> None
     assert len(long_memory_tracks) == 2
     assert len(upper_bound_tracks) == 1
     assert [point.frame_index for point in upper_bound_tracks[0].history] == [0, 20]
+
+
+def test_upper_bound_chooses_detection_nearest_to_sticky_track() -> None:
+    frame_detections = [
+        _frame(0, [Detection(left=10, top=10, width=4, height=4, confidence=0.8)]),
+        _frame(
+            1,
+            [
+                Detection(left=500, top=10, width=4, height=4, confidence=0.9),
+                Detection(left=13, top=10, width=4, height=4, confidence=0.7),
+            ],
+        ),
+    ]
+
+    upper_bound_tracks = build_tracks_for_tracker(
+        tracker_name="upper_bound",
+        frame_detections=frame_detections,
+        metadata=_wide_metadata(),
+        source_video_id="synthetic_upper_bound",
+        stabilization=StabilizationInfo(applied=False, method="none"),
+    )
+
+    main_track = max(upper_bound_tracks, key=lambda track: len(track.history))
+    assert [point.frame_index for point in main_track.history] == [0, 1]
+    assert main_track.history[-1].cx == pytest.approx(0.015)
+
+
+def test_iter_limited_video_frames_seeks_to_start_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: dict[str, object] = {}
+    metadata = VideoMetadata(
+        path="synthetic.mp4",
+        fps=10.0,
+        total_frames=100,
+        width=100,
+        height=100,
+    )
+
+    def fake_iter_video_frames(
+        video_path: str,
+        *,
+        start_frame: int = 0,
+        metadata: VideoMetadata | None = None,
+    ):
+        calls["video_path"] = video_path
+        calls["start_frame"] = start_frame
+        calls["metadata"] = metadata
+        yield from [
+            VideoFrame(frame_index=start_frame, timestamp_ms=1000, frame=None),
+            VideoFrame(frame_index=start_frame + 1, timestamp_ms=1100, frame=None),
+        ]
+
+    monkeypatch.setattr(detector_eval, "iter_video_frames", fake_iter_video_frames)
+
+    frames = list(
+        iter_limited_video_frames(
+            "synthetic.mp4",
+            max_frames=1,
+            start_sec=3.0,
+            metadata=metadata,
+        )
+    )
+
+    assert calls == {
+        "video_path": "synthetic.mp4",
+        "start_frame": 30,
+        "metadata": metadata,
+    }
+    assert [frame.frame_index for frame in frames] == [30]
 
 
 def test_summary_includes_detector_and_track_metrics() -> None:

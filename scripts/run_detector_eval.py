@@ -110,6 +110,7 @@ def main() -> int:
                         eval_video_path,
                         max_frames,
                         start_sec=args.start_sec,
+                        metadata=metadata,
                     )
                     frame_detections = list(detector.detect_frames(frames))
                     detections_path = output_root / "detections" / f"{run_key_base}.json"
@@ -285,6 +286,16 @@ def _parse_args() -> argparse.Namespace:
             "Detector inference and stabilization are skipped."
         ),
     )
+    parser.add_argument(
+        "--debug-motion-dump-dir",
+        help="Optional directory to save YOLOMG center frames and generated motion masks.",
+    )
+    parser.add_argument(
+        "--debug-motion-dump-limit",
+        type=int,
+        default=10,
+        help="Maximum number of YOLOMG debug center/motion frame pairs to save.",
+    )
     return parser.parse_args()
 
 
@@ -433,6 +444,8 @@ def _build_detectors(args: argparse.Namespace) -> list[DetectorAdapter]:
                     weights_path=args.yolomg_weights,
                     confidence_threshold=args.conf,
                     image_size=args.imgsz,
+                    debug_motion_dump_dir=args.debug_motion_dump_dir,
+                    debug_motion_dump_limit=args.debug_motion_dump_limit,
                 )
             )
         elif name == "baseline":

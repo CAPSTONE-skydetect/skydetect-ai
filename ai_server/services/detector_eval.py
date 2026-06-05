@@ -199,6 +199,8 @@ class YOLOMGAdapter:
     iou_threshold: float = 0.45
     image_size: int = 1280
     device: str = ""
+    debug_motion_dump_dir: str | None = None
+    debug_motion_dump_limit: int = 10
     name: str = "yolomg"
 
     def __post_init__(self) -> None:
@@ -207,6 +209,7 @@ class YOLOMGAdapter:
         self._letterbox: Any | None = None
         self._non_max_suppression: Any | None = None
         self._scale_boxes: Any | None = None
+        self._debug_motion_dump_count = 0
 
     def detect_frames(self, frames: Iterable[VideoFrame]) -> Iterator[FrameDetections]:
         self._load_backend()
@@ -240,6 +243,7 @@ class YOLOMGAdapter:
                 older_frame=frame_buffer[0].frame,
                 center_frame=center_frame.frame,
                 newer_frame=frame_buffer[4].frame,
+                frame_index=center_frame.frame_index,
             )
             yield FrameDetections(
                 frame_index=center_frame.frame_index,
@@ -326,6 +330,7 @@ class YOLOMGAdapter:
         older_frame: Any,
         center_frame: Any,
         newer_frame: Any,
+        frame_index: int,
     ) -> list[Detection]:
         assert self._backend is not None
         assert self._torch is not None
@@ -337,6 +342,11 @@ class YOLOMGAdapter:
             older_frame=older_frame,
             center_frame=center_frame,
             newer_frame=newer_frame,
+        )
+        self._write_debug_motion_frames(
+            frame_index=frame_index,
+            center_frame=center_frame,
+            motion_frame=motion_frame,
         )
         tensor = self._frame_to_tensor(center_frame)
         motion_tensor = self._frame_to_tensor(motion_frame)
@@ -366,6 +376,27 @@ class YOLOMGAdapter:
                     )
                 )
         return detections
+
+    def _write_debug_motion_frames(
+        self,
+        *,
+        frame_index: int,
+        center_frame: Any,
+        motion_frame: Any,
+    ) -> None:
+        if not self.debug_motion_dump_dir:
+            return
+        if self._debug_motion_dump_count >= max(0, self.debug_motion_dump_limit):
+            return
+
+        import cv2
+
+        output_dir = Path(self.debug_motion_dump_dir).expanduser()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        prefix = output_dir / f"frame_{frame_index:06d}"
+        cv2.imwrite(str(prefix.with_name(prefix.name + "_center.jpg")), center_frame)
+        cv2.imwrite(str(prefix.with_name(prefix.name + "_motion.jpg")), motion_frame)
+        self._debug_motion_dump_count += 1
 
     def _build_motion_frame(
         self,
@@ -592,22 +623,30 @@ def iter_limited_video_frames(
     video_path: str,
     max_frames: int | None,
     start_sec: float = 0.0,
+    metadata: VideoMetadata | None = None,
 ) -> Iterator[VideoFrame]:
-    start_frame = _start_frame_for_video(video_path, start_sec)
+    start_frame = _start_frame_for_video(video_path, start_sec, metadata=metadata)
     yielded_count = 0
-    for frame in iter_video_frames(video_path):
-        if frame.frame_index < start_frame:
-            continue
+    for frame in iter_video_frames(
+        video_path,
+        start_frame=start_frame,
+        metadata=metadata,
+    ):
         if max_frames is not None and yielded_count >= max_frames:
             break
         yielded_count += 1
         yield frame
 
 
-def _start_frame_for_video(video_path: str, start_sec: float) -> int:
+def _start_frame_for_video(
+    video_path: str,
+    start_sec: float,
+    *,
+    metadata: VideoMetadata | None = None,
+) -> int:
     if start_sec <= 0:
         return 0
-    metadata = load_video_metadata(video_path)
+    metadata = metadata or load_video_metadata(video_path)
     return min(metadata.total_frames - 1, max(0, round(metadata.fps * start_sec)))
 
 
@@ -974,7 +1013,7 @@ def write_track_visualization(
     import cv2
 
     metadata = load_video_metadata(input_video_path)
-    start_frame = _start_frame_for_video(input_video_path, start_sec)
+    start_frame = _start_frame_for_video(input_video_path, start_sec, metadata=metadata)
     capture = cv2.VideoCapture(input_video_path)
     if not capture.isOpened():
         raise ValueError(f"Failed to open video for visualization: {input_video_path}")
@@ -1246,6 +1285,7 @@ def _match_sort_detections(
             tracks=tracks,
             active_indices=active_indices,
             detections=detections,
+            frame_index=frame_index,
         )
     raise ValueError(f"Unknown SORT match strategy: {match_strategy}")
 
@@ -1289,8 +1329,9 @@ def _single_detection_upper_bound_matches(
     tracks: Sequence[_SortTrackState],
     active_indices: Sequence[int],
     detections: Sequence[Detection],
+    frame_index: int,
 ) -> list[tuple[int, int]]:
-    if len(detections) != 1 or not active_indices:
+    if not detections or not active_indices:
         return []
     track_index = max(
         active_indices,
@@ -1299,7 +1340,16 @@ def _single_detection_upper_bound_matches(
             len(tracks[index].history),
         ),
     )
-    return [(track_index, 0)]
+    predicted = tracks[track_index].predicted_bbox(frame_index)
+    predicted_center = (_center_x(predicted), _center_y(predicted))
+    detection_index = min(
+        range(len(detections)),
+        key=lambda index: _center_distance(
+            predicted_center,
+            _detection_center(detections[index]),
+        ),
+    )
+    return [(track_index, detection_index)]
 
 
 def _track_point_from_detection(
@@ -1321,6 +1371,11 @@ def _track_point_from_detection(
 
 def _bbox_from_detection(detection: Detection) -> tuple[int, int, int, int]:
     return (detection.left, detection.top, detection.width, detection.height)
+
+
+def _detection_center(detection: Detection) -> tuple[float, float]:
+    bbox = _bbox_from_detection(detection)
+    return (_center_x(bbox), _center_y(bbox))
 
 
 def _bbox_iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
