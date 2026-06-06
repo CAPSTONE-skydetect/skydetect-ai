@@ -39,14 +39,32 @@ class AcademicVisualizer:
                      fontsize=18, fontweight="bold", y=0.98)
 
         # ─────────────────────────────────────────────────────────────────
-        # [Plot 1] Histogram & KDE (속도 및 가속도 확률밀도 대조)
+        # [Plot 1] Histogram & KDE (속도 및 가속도 확률밀도 대조 - 보완본)
         # ─────────────────────────────────────────────────────────────────
         ax1 = axes[0, 0]
+        ax1.axis('off')  # 부모 축은 투명하게 숨김 처리
+        
+        # Plot 1 영역을 좌(v_mean)/우(a_mean) 서브 플롯으로 분리
+        gs1 = ax1.get_subplotspec().subgridspec(1, 2, wspace=0.3)
+        ax1_left = fig.add_subplot(gs1[0, 0])
+        ax1_right = fig.add_subplot(gs1[0, 1])
+        
+        # 왼쪽 서브 플롯: Velocity KDE (v_mean)
+        sns.kdeplot(data=df, x="v_mean", hue="label", fill=True, common_norm=False, 
+                    palette=palette, alpha=0.4, linewidth=2, ax=ax1_left, legend=False)
+        ax1_left.set_title("Normalized Speed ($v_{mean}$)", fontsize=11, fontweight="bold")
+        ax1_left.set_xlabel("Speed Mean (BL/s)", fontsize=10)
+        ax1_left.set_ylabel("Density", fontsize=10)
+        
+        # 오른쪽 서브 플롯: Acceleration KDE (a_mean)
         sns.kdeplot(data=df, x="a_mean", hue="label", fill=True, common_norm=False, 
-                    palette=palette, alpha=0.4, linewidth=2, ax=ax1)
-        ax1.set_title("Plot 1: Acceleration Probability Density (KDE)", fontsize=13, fontweight="bold")
-        ax1.set_xlabel("Normalized Acceleration Mean ($a_{mean}$)", fontsize=11)
-        ax1.set_ylabel("Density", fontsize=11)
+                    palette=palette, alpha=0.4, linewidth=2, ax=ax1_right)
+        ax1_right.set_title("Normalized Accel ($a_{mean}$)", fontsize=11, fontweight="bold")
+        ax1_right.set_xlabel("Acceleration Mean", fontsize=10)
+        ax1_right.set_ylabel("")  # 중복되는 Y축 라벨 제거로 가독성 확보
+        
+        # 상위 타이틀 통합 제어
+        ax1.set_title("Plot 1: Kinematic Probability Density (KDE)", fontsize=13, fontweight="bold", y=1.05)
 
         # ─────────────────────────────────────────────────────────────────
         # [Plot 2] Violin Plot (속도 표준편차 및 방향 편차의 변산성 대조)
