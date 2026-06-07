@@ -252,6 +252,12 @@ def _parse_args() -> argparse.Namespace:
         help="Detector image size.",
     )
     parser.add_argument(
+        "--motion-blur-kernel",
+        type=int,
+        default=11,
+        help="YOLOMG motion mask Gaussian blur kernel. Use 0 for no blur.",
+    )
+    parser.add_argument(
         "--eval-clip-sec",
         type=float,
         help="Optional fixed clip length for every video.",
@@ -444,6 +450,7 @@ def _build_detectors(args: argparse.Namespace) -> list[DetectorAdapter]:
                     weights_path=args.yolomg_weights,
                     confidence_threshold=args.conf,
                     image_size=args.imgsz,
+                    motion_blur_kernel=args.motion_blur_kernel,
                     debug_motion_dump_dir=args.debug_motion_dump_dir,
                     debug_motion_dump_limit=args.debug_motion_dump_limit,
                 )

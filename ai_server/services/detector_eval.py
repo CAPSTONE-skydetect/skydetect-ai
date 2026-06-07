@@ -199,6 +199,7 @@ class YOLOMGAdapter:
     iou_threshold: float = 0.45
     image_size: int = 1280
     device: str = ""
+    motion_blur_kernel: int = 11
     debug_motion_dump_dir: str | None = None
     debug_motion_dump_limit: int = 10
     name: str = "yolomg"
@@ -413,6 +414,7 @@ class YOLOMGAdapter:
                 center_frame=center_frame,
                 newer_frame=newer_frame,
                 cv2=cv2,
+                blur_kernel=self.motion_blur_kernel,
             )
         except Exception as exc:
             LOGGER.warning("YOLOMG motion mask build failed: %s", exc)
@@ -1080,6 +1082,7 @@ def _build_yolomg_fd5_mask_frame(
     center_frame: Any,
     newer_frame: Any,
     cv2: Any,
+    blur_kernel: int = 11,
 ) -> Any:
     """Build a three-channel motion mask similar to YOLOMG's FD5_mask.py.
 
@@ -1088,9 +1091,9 @@ def _build_yolomg_fd5_mask_frame(
     the original dualdetector path, so we return a BGR image here.
     """
 
-    older_gray = _blurred_gray(older_frame, cv2)
-    center_gray = _blurred_gray(center_frame, cv2)
-    newer_gray = _blurred_gray(newer_frame, cv2)
+    older_gray = _blurred_gray(older_frame, cv2, blur_kernel=blur_kernel)
+    center_gray = _blurred_gray(center_frame, cv2, blur_kernel=blur_kernel)
+    newer_gray = _blurred_gray(newer_frame, cv2, blur_kernel=blur_kernel)
 
     compensated_older = _motion_compensate_to_reference(
         moving_gray=older_gray,
@@ -1111,9 +1114,12 @@ def _build_yolomg_fd5_mask_frame(
     return cv2.cvtColor(frame_diff, cv2.COLOR_GRAY2BGR)
 
 
-def _blurred_gray(frame: Any, cv2: Any) -> Any:
-    blurred = cv2.GaussianBlur(frame, (11, 11), 0)
-    return cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY)
+def _blurred_gray(frame: Any, cv2: Any, *, blur_kernel: int = 11) -> Any:
+    if blur_kernel > 0:
+        if blur_kernel % 2 == 0:
+            raise ValueError(f"YOLOMG motion blur kernel must be odd or 0: {blur_kernel}")
+        frame = cv2.GaussianBlur(frame, (blur_kernel, blur_kernel), 0)
+    return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
 
 def _motion_compensate_to_reference(
