@@ -98,8 +98,8 @@ Run the same sample video once with `none` and once with `ffmpeg_vidstab`:
 This writes per-run outputs to `artifacts/tracks/` and also creates a
 `*_compare_summary.json` file that records which run succeeded or failed.
 
-## YOLOMG B/C Handoff Fixture
+## YOLOMG B/C 전달 자료
 
-A validated real-video `TrackSequence` fixture and reproduction instructions
-for B/C integration are available in
-`ai_server/docs/yolomg_handoff/README.md`.
+실제 드론 영상으로 생성하고 shared schema 검증을 마친 `TrackSequence`
+fixture, 재현 명령, B/C 파트 확인 요청은
+`ai_server/docs/yolomg_handoff/README.md`에서 확인할 수 있습니다.
