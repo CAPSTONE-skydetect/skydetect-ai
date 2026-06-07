@@ -97,3 +97,9 @@ Run the same sample video once with `none` and once with `ffmpeg_vidstab`:
 
 This writes per-run outputs to `artifacts/tracks/` and also creates a
 `*_compare_summary.json` file that records which run succeeded or failed.
+
+## YOLOMG B/C Handoff Fixture
+
+A validated real-video `TrackSequence` fixture and reproduction instructions
+for B/C integration are available in
+`ai_server/docs/yolomg_handoff/README.md`.

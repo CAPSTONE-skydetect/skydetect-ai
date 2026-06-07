@@ -1,0 +1,40 @@
+{
+  "selection_policy": [
+    "quality.num_points descending",
+    "quality.missing_ratio ascending",
+    "quality.mean_conf descending"
+  ],
+  "selected_track_id": 1,
+  "ground_truth_label": "drone",
+  "note": "ground_truth_label is experiment metadata only and is not part of the TrackSequence passed to B/C.",
+  "candidates": [
+    {
+      "track_id": 1,
+      "num_points": 246,
+      "missing_ratio": 0.0,
+      "mean_conf": 0.814,
+      "track_stability": "fair"
+    },
+    {
+      "track_id": 2,
+      "num_points": 93,
+      "missing_ratio": 0.546,
+      "mean_conf": 0.482,
+      "track_stability": "poor"
+    },
+    {
+      "track_id": 3,
+      "num_points": 50,
+      "missing_ratio": 0.254,
+      "mean_conf": 0.506,
+      "track_stability": "poor"
+    },
+    {
+      "track_id": 4,
+      "num_points": 1,
+      "missing_ratio": 0.0,
+      "mean_conf": 0.407,
+      "track_stability": "poor"
+    }
+  ]
+}
