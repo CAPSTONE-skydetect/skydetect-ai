@@ -76,6 +76,11 @@ class Environment:
         """
         # 논문 수식 기반: dW = -(1/tau)*W*dt + sigma*sqrt(dt)*N(0,1)
         dw = np.random.normal(0, self.gust_std, 3)
+
+        # [Sim2Real 추가] apply_noise=True 일 때 5% 확률로 순간 돌풍(Extreme Gust) 버스트 발생
+        if apply_noise and np.random.rand() < 0.05:
+            dw += np.random.uniform(-4.0, 4.0, 3) # x, y, z 전 방향 불규칙 외란 벡터
+
         self.current_gust += (-self.current_gust / self.gust_tau) * self.dt + dw * np.sqrt(self.dt)
         
         # 기본 풍속 + 동적 돌풍 
