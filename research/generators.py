@@ -180,6 +180,17 @@ class BaseAgent(ABC) :
         w = (self.real_width / distance) * focal_constant
         h = (self.real_height / distance) * focal_constant
 
+        # [Sim2Real 추가] 실제 비전 탐지 엔진의 바운딩 박스 흔들림(Jitter) 모사
+        if apply_noise:
+            cx += np.random.normal(0, 0.003)  # 중심점 미세 흔들림
+            cy += np.random.normal(0, 0.003)
+            w += np.random.normal(0, 0.002)   # 원근 측정 노이즈
+            h += np.random.normal(0, 0.002)
+
+        # 신뢰도(Confidence Score) 다채하화 및 클리핑 가동
+        conf_min, conf_max = (0.75, 0.95) if apply_noise else (0.92, 0.99)
+        conf = np.random.uniform(conf_min, conf_max)
+
         # 5. 서비스 규격(JSON) 데이터 반환 
         return {
             "frame_index": frame_index,
@@ -188,7 +199,7 @@ class BaseAgent(ABC) :
             "cy": round(float(np.clip(cy, 0.0, 1.0)), 4),
             "w": round(float(np.clip(w, 0.005, 0.2)), 4),
             "h": round(float(np.clip(h, 0.005, 0.2)), 4),
-            "conf": round(float(np.random.uniform(0.92, 0.99)), 2)
+            "conf": round(float(conf), 2)
         }
 
 
