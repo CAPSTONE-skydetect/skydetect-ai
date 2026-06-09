@@ -1,34 +1,40 @@
 {
-  "timestamp": "2026-06-08T13:50:18.136231Z",
+  "timestamp": "2026-06-09T04:34:09.683339Z",
   "source_track_file": "selected_track.json",
-  "total_processed_frames": 246,
-  "extracted_real_features": {
-    "v_mean": 2.6163,
-    "v_std": 1.3377,
-    "a_mean": 70.4121,
-    "heading_change_ratio": 0.3238,
-    "maneuverability_sigma": 8.0803
-  },
-  "simulation_distance_mapping": {
-    "v_mean": {
-      "z_score_vs_bird": 1.9358,
-      "z_score_vs_drone": 0.8414
-    },
-    "v_std": {
-      "z_score_vs_bird": -1.2573,
-      "z_score_vs_drone": -1.4481
-    },
-    "a_mean": {
-      "z_score_vs_bird": 1.6946,
-      "z_score_vs_drone": 0.937
-    },
-    "heading_change_ratio": {
-      "z_score_vs_bird": 1.7427,
-      "z_score_vs_drone": 1.3987
-    },
-    "maneuverability_sigma": {
-      "z_score_vs_bird": 3.0516,
-      "z_score_vs_drone": 4.8459
+  "total_processed_tracks": 1,
+  "tracks_report": [
+    {
+      "track_index": 0,
+      "total_frames": 246,
+      "extracted_features": {
+        "v_mean": 2.6026,
+        "v_std": 1.3264,
+        "a_mean": 70.0385,
+        "heading_change_ratio": 0.304,
+        "maneuverability_sigma": 1.7122
+      },
+      "simulation_distance_mapping": {
+        "v_mean": {
+          "z_score_vs_bird": 1.9144,
+          "z_score_vs_drone": 0.8199
+        },
+        "v_std": {
+          "z_score_vs_bird": -1.2598,
+          "z_score_vs_drone": -1.4501
+        },
+        "a_mean": {
+          "z_score_vs_bird": 1.6776,
+          "z_score_vs_drone": 0.9229
+        },
+        "heading_change_ratio": {
+          "z_score_vs_bird": 1.5429,
+          "z_score_vs_drone": 1.1415
+        },
+        "maneuverability_sigma": {
+          "z_score_vs_bird": -0.5271,
+          "z_score_vs_drone": -0.3975
+        }
+      }
     }
-  }
+  ]
 }
