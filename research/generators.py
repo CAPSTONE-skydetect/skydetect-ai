@@ -69,7 +69,7 @@ class Environment:
             
         self.h_star = self.x_goal[2]  # 선호 비행 고도 
 
-    def update_and_get_wind(self):
+    def update_and_get_wind(self, apply_noise=False):
         """
         Ornstein-Uhlenbeck(OU) 프로세스를 이용한 풍속 계산
         이전 프레임의 바람 상태를 유지하면서 새로운 변화량을 더함
@@ -146,7 +146,7 @@ class BaseAgent(ABC) :
         self.history.append(self.pos.copy())
         return self.pos
     
-    def get_observation(self, frame_index):
+    def get_observation(self, frame_index, apply_noise=False):  
         """
         [Simplified Lateral Mapping]
         - CX: X축(전진 거리)을 화면 가로에 매핑 
@@ -204,7 +204,7 @@ class BaseAgent(ABC) :
 
 
 class BirdDyn(BaseAgent):
-    def __init__(self, env, species="pigeon", **kwargs):
+    def __init__(self, env, species="pigeon", apply_noise=False, **kwargs):
         super().__init__(env, **kwargs)
 
         # 1. 종별 파라미터 로드 (기본값 : 비둘기)
@@ -212,9 +212,14 @@ class BirdDyn(BaseAgent):
 
         self.species = species
         self.s_star = config["s_star"]
+
+        # [Sim2Real 추가] 의도적 파라미터 오버랩: 고정 속도 경계를 무작위로 흐림
+        if apply_noise:
+            self.s_star += np.random.uniform(-3.5, 3.5) # 드론 선호속도(15) 구역과 완벽히 교집합 형성
+        
         self.k_s = config["k_s"]
         self.phi_max = np.radians(config["phi_max"])
-        self.sigma_s = config["sigma_s"]
+        self.sigma_s = config["sigma_s"] if not apply_noise else config["sigma_s"] * 1.5
         self.sigma_phi = config["sigma_phi"]
         self.k_g = config["k_g"]
 
@@ -229,7 +234,7 @@ class BirdDyn(BaseAgent):
         self.phi = 0.0        # 현재 뱅크각 (Roll)
         self.gamma = 0.0      # 현재 피치각 (Pitch)
     
-    def step(self):
+    def step(self, apply_noise=False):
         """
         매 프레임마다 조류의 물리 상태를 업데이트
         """
@@ -274,13 +279,13 @@ class BirdDyn(BaseAgent):
         ])
 
         # --- (4) 최종 위치 업데이트 (바람 반영) ---
-        wind = self.env.update_and_get_wind()
+        wind = self.env.update_and_get_wind(apply_noise=apply_noise)
         v_ground = self.s * self.u + wind
         return self.update_position(v_ground)
 
 
 class DroneDyn(BaseAgent):
-    def __init__(self, env, model='quadcopter', **kwargs):
+    def __init__(self, env, model='quadcopter', apply_noise=False, **kwargs):
         super().__init__(env, **kwargs)
     
         # 1. 드론 파라미터 로드
@@ -288,9 +293,14 @@ class DroneDyn(BaseAgent):
 
         self.model = model
         self.s_star = config["s_star"]      # 선호 대기 속도
+
+        # [Sim2Real 추가] 의도적 파라미터 오버랩
+        if apply_noise:
+            self.s_star += np.random.uniform(-3.0, 3.0) # 조류 속도 커버리지로 진입 유도
+
         self.a_max = config["a_max"]        # 모터 출력 한계
         self.k_a = config["k_a"]            # 제어기 민감도
-        self.sigma_s = config["sigma_s"]    # 대기 속도 노이즈
+        self.sigma_s = config["sigma_s"] if not apply_noise else 0.3    # 대기 속도 노이즈
         self.sigma_u = config["sigma_u"]    # 헤딩 노이즈
         self.k_h = config["k_h"]            # 고도 유지 강도
 
@@ -302,7 +312,7 @@ class DroneDyn(BaseAgent):
         # 드론은 현재 대기 속도 벡터(v_air)를 직접 관리
         self.v_air = self.s * self.u
 
-    def step(self):
+    def step(self, apply_noise=False):
         """
         매 프레임마다 드론의 가속도 제어 및 위치 업데이트
         """ 
@@ -338,7 +348,7 @@ class DroneDyn(BaseAgent):
 
         # --- (4) 최종 지면 속도(v_ground) 계산 및 이동 ---
         # 지면 속도 = 비행체의 추진 속도 + 환경풍
-        wind = self.env.update_and_get_wind()
+        wind = self.env.update_and_get_wind(apply_noise=apply_noise)
         v_ground = self.v_air + wind
         
         return self.update_position(v_ground)
