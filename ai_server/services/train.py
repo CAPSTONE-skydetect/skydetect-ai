@@ -7,7 +7,6 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
 
 _FEATURE_NAMES = [
     "v_mean",
@@ -49,15 +48,11 @@ def train_and_save(
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     X, y = _generate_simulation_data(data_path)
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
 
     clf = RandomForestClassifier(n_estimators=100, random_state=42)
-    clf.fit(X_train, y_train) # 학습
+    clf.fit(X, y)
 
-    accuracy = clf.score(X_test, y_test)
-    print(f"RF 학습 완료 — test accuracy: {accuracy:.4f}")
+    print(f"RF 학습 완료 — 학습 샘플 수: {len(y)}")
     print(f"모델 저장: {output_path}")
 
     joblib.dump({"model": clf, "feature_names": _FEATURE_NAMES}, output_path)
