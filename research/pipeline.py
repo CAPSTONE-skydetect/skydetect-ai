@@ -28,7 +28,7 @@ class BatchRunner:
         # 저장 디렉토리 자동 생성
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def _run_single_simulation(self, scenario: str, agent_type: str, sub_type: str, sample_idx: int) -> dict:
+    def _run_single_simulation(self, scenario: str, agent_type: str, sub_type: str, sample_idx: int, apply_noise: bool = False) -> dict:
         """
         단일 비행 시퀀스를 물리 엔진 상에서 가동 & 2D 가상 카메라 관측 데이터를 추출
         """
@@ -41,6 +41,9 @@ class BatchRunner:
         unique_seed = (sample_idx * 10000) + (agent_map[agent_type] * 100) + (scenario_map[scenario] * 10) + sub_map[sub_type]
 
         rng = np.random.default_rng(unique_seed)
+
+        # [Sim2Real 추가] apply_noise=True 일 때 3초~10초(90~300 프레임) 가변 윈도우 동적 샘플링
+        current_max_frames = rng.integers(90, 301) if apply_noise else self.max_frames
 
         # 2️. 시나리오별 맞춤형 환경 변수(가변 변수) 세분화 설정
         base_goal = [300.0, 50.0, 50.0]  # 기본 목적지 공간 좌표
@@ -75,9 +78,9 @@ class BatchRunner:
         env = Environment(fps=self.fps, wind_speed=wind_speed, gust_intensity=gust_intensity, goal_pos=goal_pos)
         
         if agent_type == "bird":
-            agent = BirdDyn(env, species=sub_type, start_pos=start_pos, start_speed=start_speed)
+            agent = BirdDyn(env, species=sub_type, start_pos=start_pos, start_speed=start_speed, apply_noise=apply_noise)
         else:
-            agent = DroneDyn(env, model=sub_type, start_pos=start_pos, start_speed=start_speed)
+            agent = DroneDyn(env, model=sub_type, start_pos=start_pos, start_speed=start_speed, apply_noise=apply_noise)
         
         # 설계서 명세 규격에 맞춘 계층 구조 사전 정의
         sample_id = f"{sub_type}_{scenario}_{sample_idx:03d}"
@@ -93,7 +96,7 @@ class BatchRunner:
         }
 
         # 4️. 내부 루프 (Sample Loop): 300 프레임 시뮬레이션 타임라인 제어
-        for frame in range(self.max_frames):
+        for frame in range(current_max_frames):
             
             # [시나리오 동적 제어 레이어 구현]
             if scenario == "sudden_dash":
@@ -122,14 +125,14 @@ class BatchRunner:
                     env.x_goal = np.array([base_goal[0] + 150.0, base_goal[1], base_goal[2]])
 
             # 물리 모델 1스텝 구동 (3D 좌표 변위 계산)
-            agent.step()
+            agent.step(apply_noise=apply_noise)
 
             # 5️. Early Stopping 예외 제어 (지면 추락 검사)
             if agent.pos[2] <= 0:
                 break
 
             # 2D 관측 데이터 슬라이싱 투영 및 기록
-            obs = agent.get_observation(frame_index=frame)
+            obs = agent.get_observation(frame_index=frame, apply_noise=apply_noise)
             sim_entry["observations"].append(obs)
 
         return sim_entry
