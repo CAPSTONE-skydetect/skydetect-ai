@@ -19,3 +19,9 @@ research/plots/
 # Generated A pipeline outputs
 artifacts/tracks/*.json
 artifacts/experiments/
+
+# Sample media (large binaries kept local, not committed)
+samples/*.mp4
+samples/*.mov
+samples/*.avi
+samples/*.mpg
