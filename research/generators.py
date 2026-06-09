@@ -385,7 +385,7 @@ class TrajectoryGenerator:
         # 1. 시뮬레이션 루프 수행
         for i in range(num_frames):
             # 물리 상태 업데이트 (3D)
-            agent.step()
+            agent.step(apply_noise=apply_noise)
             
             # 현재 상태 관측 (3D -> 2D 투영)
             # BaseAgent에 구현한 get_observation 호출
@@ -448,5 +448,5 @@ class TrajectoryGenerator:
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         
-        print(f"✅ 데이터 생성 완료: {file_path}")
+        print(f"데이터 생성 완료: {file_path}")
         return file_path
