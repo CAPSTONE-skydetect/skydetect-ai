@@ -28,7 +28,7 @@ class BatchRunner:
         # 저장 디렉토리 자동 생성
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def _run_single_simulation(self, scenario: str, agent_type: str, sub_type: str, sample_idx: int) -> dict:
+    def _run_single_simulation(self, scenario: str, agent_type: str, sub_type: str, sample_idx: int, apply_noise: bool = False) -> dict:
         """
         단일 비행 시퀀스를 물리 엔진 상에서 가동 & 2D 가상 카메라 관측 데이터를 추출
         """
@@ -41,6 +41,9 @@ class BatchRunner:
         unique_seed = (sample_idx * 10000) + (agent_map[agent_type] * 100) + (scenario_map[scenario] * 10) + sub_map[sub_type]
 
         rng = np.random.default_rng(unique_seed)
+
+        # [Sim2Real 추가] apply_noise=True 일 때 3초~10초(90~300 프레임) 가변 윈도우 동적 샘플링
+        current_max_frames = rng.integers(90, 301) if apply_noise else self.max_frames
 
         # 2️. 시나리오별 맞춤형 환경 변수(가변 변수) 세분화 설정
         base_goal = [300.0, 50.0, 50.0]  # 기본 목적지 공간 좌표
@@ -75,9 +78,9 @@ class BatchRunner:
         env = Environment(fps=self.fps, wind_speed=wind_speed, gust_intensity=gust_intensity, goal_pos=goal_pos)
         
         if agent_type == "bird":
-            agent = BirdDyn(env, species=sub_type, start_pos=start_pos, start_speed=start_speed)
+            agent = BirdDyn(env, species=sub_type, start_pos=start_pos, start_speed=start_speed, apply_noise=apply_noise)
         else:
-            agent = DroneDyn(env, model=sub_type, start_pos=start_pos, start_speed=start_speed)
+            agent = DroneDyn(env, model=sub_type, start_pos=start_pos, start_speed=start_speed, apply_noise=apply_noise)
         
         # 설계서 명세 규격에 맞춘 계층 구조 사전 정의
         sample_id = f"{sub_type}_{scenario}_{sample_idx:03d}"
@@ -93,7 +96,7 @@ class BatchRunner:
         }
 
         # 4️. 내부 루프 (Sample Loop): 300 프레임 시뮬레이션 타임라인 제어
-        for frame in range(self.max_frames):
+        for frame in range(current_max_frames):
             
             # [시나리오 동적 제어 레이어 구현]
             if scenario == "sudden_dash":
@@ -122,44 +125,44 @@ class BatchRunner:
                     env.x_goal = np.array([base_goal[0] + 150.0, base_goal[1], base_goal[2]])
 
             # 물리 모델 1스텝 구동 (3D 좌표 변위 계산)
-            agent.step()
+            agent.step(apply_noise=apply_noise)
 
             # 5️. Early Stopping 예외 제어 (지면 추락 검사)
             if agent.pos[2] <= 0:
                 break
 
             # 2D 관측 데이터 슬라이싱 투영 및 기록
-            obs = agent.get_observation(frame_index=frame)
+            obs = agent.get_observation(frame_index=frame, apply_noise=apply_noise)
             sim_entry["observations"].append(obs)
 
         return sim_entry
 
-    def execute_batch_pipeline(self, bird_samples_per_species: int = 50, drone_samples_per_model: int = 150) -> str:
+    def execute_batch_pipeline(self, bird_samples_per_species: int = 50, drone_samples_per_model: int = 150, apply_noise: bool = False) -> str:
         """
         4대 세분화 시나리오 전체를 순회하며 새 600개, 드론 600개(총 1,200개)의 유효 데이터셋을 대량 생산합니다.
         """
         scenarios = ["steady_cruise", "sudden_dash", "sharp_turns", "multi_mode"]
         birds = ["pigeon", "seagull", "falcon"]
-
         results = []
+
+        # [Sim2Real 추가] 가변 길이에 따른 최소 보장 프레임 허들 동적 세팅 (트랩 해제)
+        min_frame_cutoff = 70 if apply_noise else 150
+
         print("=" * 65)
-        print(f" [Phase 1: Batch Runner] 4대 특화 시나리오 공정 가동 시작")
-        print(f"   └ 목표 수량: 조류 600개 (3종 × 50개 × 4시나리오)")
-        print(f"   └ 목표 수량: 드론 600개 (1종 × 150개 × 4시나리오)")
+        print(f" [Phase 1: Batch Runner] v2 고도화 공정 가동 (Noise 주입: {apply_noise})")
         print("=" * 65)
 
         # 외부 루프 (Scenario Loop)
         for scenario in scenarios:
-            print(f"현재 가동 중인 시나리오 파이프라인: [{scenario.upper()}]")
             
             # 내부 루프 1: 조류 군집 데이터 획득 (시나리오당 종별 50개 샘플)
             for species in birds:
                 valid_count = 0
                 idx = 1
                 while valid_count < bird_samples_per_species:
-                    sim_data = self._run_single_simulation(scenario, "bird", species, idx)
+                    sim_data = self._run_single_simulation(scenario, "bird", species, idx, apply_noise=apply_noise)
                     # 데이터 유효 품질 방어벽 (최소 50프레임 이상 비행한 데이터만 인정)
-                    if len(sim_data["observations"]) >= 150:
+                    if len(sim_data["observations"]) >= min_frame_cutoff:
                         results.append(sim_data)
                         valid_count += 1
                     idx += 1
@@ -168,32 +171,35 @@ class BatchRunner:
             valid_count = 0
             idx = 1
             while valid_count < drone_samples_per_model:
-                sim_data = self._run_single_simulation(scenario, "drone", "quadcopter", idx)
-                if len(sim_data["observations"]) >= 150:
+                sim_data = self._run_single_simulation(scenario, "drone", "quadcopter", idx, apply_noise=apply_noise)
+                if len(sim_data["observations"]) >= min_frame_cutoff:
                     results.append(sim_data)
                     valid_count += 1
                 idx += 1
         
         # 6️. 데이터 대량 생산 완료 후 pkl 직렬화 물리 저장
-        output_path = os.path.join(self.output_dir, "batch_raw_trajectories.pkl")
+        # [수정] 구버전(v1) 자산을 훼손하지 않기 위해 파일명 버전 분리 정책 수립
+        pkl_name = "batch_raw_trajectories_v2.pkl" if apply_noise else "batch_raw_trajectories.pkl"
+        output_path = os.path.join(self.output_dir, pkl_name)
+        
         with open(output_path, "wb") as f:
             pickle.dump(results, f)
 
-        print("-" * 65)
-        print(f"✅ [Phase 1 완료] 클래스 균형 데이터셋 원천 생산 공정 완료.")
-        print(f" 총 저장된 유효 샘플 수: {len(results)} 개")
-        print(f" 바이너리 팩토리 파일 저장 완료 경로: {output_path}")
-        print("=" * 65)
         return output_path
 
 class CoreFeatureExtractor:
-    def __init__(self, data_dir: str):
+    def __init__(self, data_dir: str, version: str = "v1"):
         """
-        :param data_dir: pkl 파일이 있고 최종 csv 파일이 생성될 디렉토리 경로
+        :param version: 'v1' (Ideal 기존형) 또는 'v2' (Noisy 실측형) 지정
         """
         self.data_dir = data_dir
-        self.input_path = os.path.join(data_dir, "batch_raw_trajectories.pkl")
-        self.output_path = os.path.join(data_dir, "simulation_features.csv")
+        # 버전에 따른 입출력 확장자 스키마 동적 매핑
+        if version == "v2":
+            self.input_path = os.path.join(data_dir, "batch_raw_trajectories_v2.pkl")
+            self.output_path = os.path.join(data_dir, "simulation_features_v2.csv")
+        else:
+            self.input_path = os.path.join(data_dir, "batch_raw_trajectories.pkl")
+            self.output_path = os.path.join(data_dir, "simulation_features.csv")
 
     def extract_features(self) -> str:
         if not os.path.exists(self.input_path):
@@ -280,21 +286,23 @@ class CoreFeatureExtractor:
 
         # 물리 데이터 저장 발행
         df.to_csv(self.output_path, index=False)
-        print(f"✅ [Phase 2 완료] CSV 피처 매트릭스 테이블 발행 완료.")
+        print(f"[Phase 2 완료] CSV 피처 매트릭스 테이블 발행 완료.")
         print(f"저장 경로: {self.output_path}")
         print("=" * 65)
         return self.output_path
 
 if __name__ == "__main__":
 
-    # 실행 환경에 구애받지 않는 안정적인 절대 경로 기저 동적 바인딩
     current_script_dir = os.path.dirname(os.path.abspath(__file__))
     target_data_dir = os.path.join(current_script_dir, "data")
 
-    # 정밀 명세 스펙 가동 (4 시나리오 × 조류종별 50개 / 드론 150개 = 1200개 Balanced 데이터 구축)
-    runner = BatchRunner(output_dir=target_data_dir, fps=30)
-    runner.execute_batch_pipeline(bird_samples_per_species=50, drone_samples_per_model=150)
+    # -----------------------------------------------------------------
+    # [실험 관리 트랙] 버전 2 (Sim2Real 고도화 노이즈 데이터셋 배포)
+    # -----------------------------------------------------------------
+    # 1. 50 FPS 가변 윈도우 및 노이즈가 주입된 v2 원천 pkl 팩토리 가동
+    runner_v2 = BatchRunner(output_dir=target_data_dir, fps=30)
+    runner_v2.execute_batch_pipeline(bird_samples_per_species=50, drone_samples_per_model=150, apply_noise=True)
     
-    # 논문 기반 피처 엔지니어링 수행 (.csv)
-    extractor = CoreFeatureExtractor(data_dir=target_data_dir)
-    extractor.extract_features()
+    # 2. v2 전용 특징량 압축기 가동 -> simulation_features_v2.csv 최종 발행
+    extractor_v2 = CoreFeatureExtractor(data_dir=target_data_dir, version="v2")
+    extractor_v2.extract_features()

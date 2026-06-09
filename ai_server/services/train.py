@@ -64,4 +64,11 @@ def train_and_save(
 
 
 if __name__ == "__main__":
-    train_and_save()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="RF 분류기 학습")
+    parser.add_argument("--data-path", default=_DEFAULT_DATA_PATH, help="학습 CSV 경로")
+    parser.add_argument("--output-path", default=_DEFAULT_MODEL_PATH, help="모델 저장 경로")
+    args = parser.parse_args()
+
+    train_and_save(output_path=args.output_path, data_path=args.data_path)
