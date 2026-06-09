@@ -372,7 +372,7 @@ class TrajectoryGenerator:
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
     
-    def generate(self, agent, num_frames=150, track_id=1):
+    def generate(self, agent, num_frames=150, track_id=1, apply_noise=False):
         """
         특정 에이전트를 시뮬레이션하여 궤적 데이터 생성
         : param agent: BirdDyn 또는 DroneDyn 인스턴스
@@ -389,9 +389,24 @@ class TrajectoryGenerator:
             
             # 현재 상태 관측 (3D -> 2D 투영)
             # BaseAgent에 구현한 get_observation 호출
-            observation = agent.get_observation(frame_index=i)
+            observation = agent.get_observation(frame_index=i, apply_noise=apply_noise)
             history_2d.append(observation)
         
+        # [Sim2Real 추가] 프레임 드롭아웃 및 기하학적 선형 보간 레이어 (지글거림 유발)
+        if apply_noise and len(history_2d) > 10:
+            # 트랙의 약 4% 구역을 무작위 결측 타깃으로 선정
+            drop_count = max(1, int(len(history_2d) * 0.04))
+            drop_indices = np.random.choice(range(2, len(history_2d) - 2), drop_count, replace=False)
+            
+            for idx in sorted(drop_indices):
+                # 전후 프레임을 이용한 강제 선해 보간 -> 매끈한 곡선에 미세 꺾임 유발
+                history_2d[idx]["cx"] = round((history_2d[idx-1]["cx"] + history_2d[idx+1]["cx"]) / 2.0, 4)
+                history_2d[idx]["cy"] = round((history_2d[idx-1]["cy"] + history_2d[idx+1]["cy"]) / 2.0, 4)
+                history_2d[idx]["w"] = round((history_2d[idx-1]["w"] + history_2d[idx+1]["w"]) / 2.0, 4)
+                history_2d[idx]["h"] = round((history_2d[idx-1]["h"] + history_2d[idx+1]["h"]) / 2.0, 4)
+                # 추적 유실 복구 지점이므로 신뢰도를 의도적으로 급락시킴
+                history_2d[idx]["conf"] = round(float(np.random.uniform(0.60, 0.75)), 2)
+
         # 2. 품질 메트릭 계산 (Part B 서비스 규격 반영)
         total_conf = sum(p['conf'] for p in history_2d)
         mean_conf = round(total_conf / len(history_2d), 3)
@@ -400,20 +415,23 @@ class TrajectoryGenerator:
         # agent의 클래스명과 종/모델 정보를 조합하여 식별자 생성
         agent_type = agent.__class__.__name__
         sub_type = getattr(agent, 'species', getattr(agent, 'model', 'unknown'))
+
+        # 노이즈 주입 여부에 따라 비디오 ID 메타 명세 차별화
+        suffix = "NOISY_V2" if apply_noise else "IDEAL_V1"
         
         data = {
             "track_id": track_id,
-            "source_video_id": f"SIM_{agent_type.upper()}_{sub_type.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            "source_video_id": f"SIM_{agent_type.upper()}_{sub_type.upper()}_{suffix}_{datetime.now().strftime('%Y%m%d')}",
             "stabilization": {
                 "applied": True,
-                "method": "simulation_ideal"
+                "method": "simulation_ideal" if not apply_noise else "sensor_noise_added"
             },
             "history": history_2d,
             "quality": {
                 "num_points": len(history_2d),
                 "mean_conf": mean_conf,
-                "missing_ratio": 0.0,
-                "track_stability": "good" if mean_conf > 0.9 else "fair"
+                "missing_ratio": 0.0 if not apply_noise else 0.04,
+                "track_stability": "good" if mean_conf > 0.88 else "fair"
             }
         }
         return data
