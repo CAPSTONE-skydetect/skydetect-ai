@@ -69,13 +69,18 @@ class Environment:
             
         self.h_star = self.x_goal[2]  # 선호 비행 고도 
 
-    def update_and_get_wind(self):
+    def update_and_get_wind(self, apply_noise=False):
         """
         Ornstein-Uhlenbeck(OU) 프로세스를 이용한 풍속 계산
         이전 프레임의 바람 상태를 유지하면서 새로운 변화량을 더함
         """
         # 논문 수식 기반: dW = -(1/tau)*W*dt + sigma*sqrt(dt)*N(0,1)
         dw = np.random.normal(0, self.gust_std, 3)
+
+        # [Sim2Real 추가] apply_noise=True 일 때 5% 확률로 순간 돌풍(Extreme Gust) 버스트 발생
+        if apply_noise and np.random.rand() < 0.05:
+            dw += np.random.uniform(-4.0, 4.0, 3) # x, y, z 전 방향 불규칙 외란 벡터
+
         self.current_gust += (-self.current_gust / self.gust_tau) * self.dt + dw * np.sqrt(self.dt)
         
         # 기본 풍속 + 동적 돌풍 
@@ -141,7 +146,7 @@ class BaseAgent(ABC) :
         self.history.append(self.pos.copy())
         return self.pos
     
-    def get_observation(self, frame_index):
+    def get_observation(self, frame_index, apply_noise=False):  
         """
         [Simplified Lateral Mapping]
         - CX: X축(전진 거리)을 화면 가로에 매핑 
@@ -175,6 +180,17 @@ class BaseAgent(ABC) :
         w = (self.real_width / distance) * focal_constant
         h = (self.real_height / distance) * focal_constant
 
+        # [Sim2Real 추가] 실제 비전 탐지 엔진의 바운딩 박스 흔들림(Jitter) 모사
+        if apply_noise:
+            cx += np.random.normal(0, 0.003)  # 중심점 미세 흔들림
+            cy += np.random.normal(0, 0.003)
+            w += np.random.normal(0, 0.002)   # 원근 측정 노이즈
+            h += np.random.normal(0, 0.002)
+
+        # 신뢰도(Confidence Score) 다채하화 및 클리핑 가동
+        conf_min, conf_max = (0.75, 0.95) if apply_noise else (0.92, 0.99)
+        conf = np.random.uniform(conf_min, conf_max)
+
         # 5. 서비스 규격(JSON) 데이터 반환 
         return {
             "frame_index": frame_index,
@@ -183,12 +199,12 @@ class BaseAgent(ABC) :
             "cy": round(float(np.clip(cy, 0.0, 1.0)), 4),
             "w": round(float(np.clip(w, 0.005, 0.2)), 4),
             "h": round(float(np.clip(h, 0.005, 0.2)), 4),
-            "conf": round(float(np.random.uniform(0.92, 0.99)), 2)
+            "conf": round(float(conf), 2)
         }
 
 
 class BirdDyn(BaseAgent):
-    def __init__(self, env, species="pigeon", **kwargs):
+    def __init__(self, env, species="pigeon", apply_noise=False, **kwargs):
         super().__init__(env, **kwargs)
 
         # 1. 종별 파라미터 로드 (기본값 : 비둘기)
@@ -196,9 +212,14 @@ class BirdDyn(BaseAgent):
 
         self.species = species
         self.s_star = config["s_star"]
+
+        # [Sim2Real 추가] 의도적 파라미터 오버랩: 고정 속도 경계를 무작위로 흐림
+        if apply_noise:
+            self.s_star += np.random.uniform(-3.5, 3.5) # 드론 선호속도(15) 구역과 완벽히 교집합 형성
+        
         self.k_s = config["k_s"]
         self.phi_max = np.radians(config["phi_max"])
-        self.sigma_s = config["sigma_s"]
+        self.sigma_s = config["sigma_s"] if not apply_noise else config["sigma_s"] * 1.5
         self.sigma_phi = config["sigma_phi"]
         self.k_g = config["k_g"]
 
@@ -213,7 +234,7 @@ class BirdDyn(BaseAgent):
         self.phi = 0.0        # 현재 뱅크각 (Roll)
         self.gamma = 0.0      # 현재 피치각 (Pitch)
     
-    def step(self):
+    def step(self, apply_noise=False):
         """
         매 프레임마다 조류의 물리 상태를 업데이트
         """
@@ -258,13 +279,13 @@ class BirdDyn(BaseAgent):
         ])
 
         # --- (4) 최종 위치 업데이트 (바람 반영) ---
-        wind = self.env.update_and_get_wind()
+        wind = self.env.update_and_get_wind(apply_noise=apply_noise)
         v_ground = self.s * self.u + wind
         return self.update_position(v_ground)
 
 
 class DroneDyn(BaseAgent):
-    def __init__(self, env, model='quadcopter', **kwargs):
+    def __init__(self, env, model='quadcopter', apply_noise=False, **kwargs):
         super().__init__(env, **kwargs)
     
         # 1. 드론 파라미터 로드
@@ -272,9 +293,14 @@ class DroneDyn(BaseAgent):
 
         self.model = model
         self.s_star = config["s_star"]      # 선호 대기 속도
+
+        # [Sim2Real 추가] 의도적 파라미터 오버랩
+        if apply_noise:
+            self.s_star += np.random.uniform(-3.0, 3.0) # 조류 속도 커버리지로 진입 유도
+
         self.a_max = config["a_max"]        # 모터 출력 한계
         self.k_a = config["k_a"]            # 제어기 민감도
-        self.sigma_s = config["sigma_s"]    # 대기 속도 노이즈
+        self.sigma_s = config["sigma_s"] if not apply_noise else 0.3    # 대기 속도 노이즈
         self.sigma_u = config["sigma_u"]    # 헤딩 노이즈
         self.k_h = config["k_h"]            # 고도 유지 강도
 
@@ -286,7 +312,7 @@ class DroneDyn(BaseAgent):
         # 드론은 현재 대기 속도 벡터(v_air)를 직접 관리
         self.v_air = self.s * self.u
 
-    def step(self):
+    def step(self, apply_noise=False):
         """
         매 프레임마다 드론의 가속도 제어 및 위치 업데이트
         """ 
@@ -322,7 +348,7 @@ class DroneDyn(BaseAgent):
 
         # --- (4) 최종 지면 속도(v_ground) 계산 및 이동 ---
         # 지면 속도 = 비행체의 추진 속도 + 환경풍
-        wind = self.env.update_and_get_wind()
+        wind = self.env.update_and_get_wind(apply_noise=apply_noise)
         v_ground = self.v_air + wind
         
         return self.update_position(v_ground)
@@ -346,7 +372,7 @@ class TrajectoryGenerator:
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
     
-    def generate(self, agent, num_frames=150, track_id=1):
+    def generate(self, agent, num_frames=150, track_id=1, apply_noise=False):
         """
         특정 에이전트를 시뮬레이션하여 궤적 데이터 생성
         : param agent: BirdDyn 또는 DroneDyn 인스턴스
@@ -359,13 +385,28 @@ class TrajectoryGenerator:
         # 1. 시뮬레이션 루프 수행
         for i in range(num_frames):
             # 물리 상태 업데이트 (3D)
-            agent.step()
+            agent.step(apply_noise=apply_noise)
             
             # 현재 상태 관측 (3D -> 2D 투영)
             # BaseAgent에 구현한 get_observation 호출
-            observation = agent.get_observation(frame_index=i)
+            observation = agent.get_observation(frame_index=i, apply_noise=apply_noise)
             history_2d.append(observation)
         
+        # [Sim2Real 추가] 프레임 드롭아웃 및 기하학적 선형 보간 레이어 (지글거림 유발)
+        if apply_noise and len(history_2d) > 10:
+            # 트랙의 약 4% 구역을 무작위 결측 타깃으로 선정
+            drop_count = max(1, int(len(history_2d) * 0.04))
+            drop_indices = np.random.choice(range(2, len(history_2d) - 2), drop_count, replace=False)
+            
+            for idx in sorted(drop_indices):
+                # 전후 프레임을 이용한 강제 선해 보간 -> 매끈한 곡선에 미세 꺾임 유발
+                history_2d[idx]["cx"] = round((history_2d[idx-1]["cx"] + history_2d[idx+1]["cx"]) / 2.0, 4)
+                history_2d[idx]["cy"] = round((history_2d[idx-1]["cy"] + history_2d[idx+1]["cy"]) / 2.0, 4)
+                history_2d[idx]["w"] = round((history_2d[idx-1]["w"] + history_2d[idx+1]["w"]) / 2.0, 4)
+                history_2d[idx]["h"] = round((history_2d[idx-1]["h"] + history_2d[idx+1]["h"]) / 2.0, 4)
+                # 추적 유실 복구 지점이므로 신뢰도를 의도적으로 급락시킴
+                history_2d[idx]["conf"] = round(float(np.random.uniform(0.60, 0.75)), 2)
+
         # 2. 품질 메트릭 계산 (Part B 서비스 규격 반영)
         total_conf = sum(p['conf'] for p in history_2d)
         mean_conf = round(total_conf / len(history_2d), 3)
@@ -374,20 +415,23 @@ class TrajectoryGenerator:
         # agent의 클래스명과 종/모델 정보를 조합하여 식별자 생성
         agent_type = agent.__class__.__name__
         sub_type = getattr(agent, 'species', getattr(agent, 'model', 'unknown'))
+
+        # 노이즈 주입 여부에 따라 비디오 ID 메타 명세 차별화
+        suffix = "NOISY_V2" if apply_noise else "IDEAL_V1"
         
         data = {
             "track_id": track_id,
-            "source_video_id": f"SIM_{agent_type.upper()}_{sub_type.upper()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            "source_video_id": f"SIM_{agent_type.upper()}_{sub_type.upper()}_{suffix}_{datetime.now().strftime('%Y%m%d')}",
             "stabilization": {
                 "applied": True,
-                "method": "simulation_ideal"
+                "method": "simulation_ideal" if not apply_noise else "sensor_noise_added"
             },
             "history": history_2d,
             "quality": {
                 "num_points": len(history_2d),
                 "mean_conf": mean_conf,
-                "missing_ratio": 0.0,
-                "track_stability": "good" if mean_conf > 0.9 else "fair"
+                "missing_ratio": 0.0 if not apply_noise else 0.04,
+                "track_stability": "good" if mean_conf > 0.88 else "fair"
             }
         }
         return data
@@ -404,5 +448,5 @@ class TrajectoryGenerator:
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         
-        print(f"✅ 데이터 생성 완료: {file_path}")
+        print(f"데이터 생성 완료: {file_path}")
         return file_path

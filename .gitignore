@@ -14,4 +14,5 @@ __pycache__/
 # Research artifacts
 research/data/
 research/plots/
+research/output/
 .ipynb_checkpoints/
