@@ -1,0 +1,138 @@
+{
+  "timestamp": "2026-05-28T01:58:46.427949Z",
+  "total_samples": {
+    "bird": 600,
+    "drone": 600
+  },
+  "metrics_summary": {
+    "v_mean": {
+      "descriptive": {
+        "bird": {
+          "mean": 1.3776,
+          "std": 0.6399,
+          "min": 0.4071,
+          "max": 2.8153
+        },
+        "drone": {
+          "mean": 2.0794,
+          "std": 0.6381,
+          "min": 0.9719,
+          "max": 3.081
+        }
+      },
+      "hypothesis_test": {
+        "t_statistic": -19.0215,
+        "p_value": 1.0547969729787587e-70,
+        "is_significant": true
+      },
+      "separation": {
+        "cohens_d": 1.0983,
+        "overlap_percentage_estimate": 58.29
+      }
+    },
+    "v_std": {
+      "descriptive": {
+        "bird": {
+          "mean": 6.9579,
+          "std": 4.4702,
+          "min": 0.0257,
+          "max": 14.5795
+        },
+        "drone": {
+          "mean": 9.806,
+          "std": 5.8477,
+          "min": 0.3342,
+          "max": 18.7639
+        }
+      },
+      "hypothesis_test": {
+        "t_statistic": -9.478,
+        "p_value": 1.4882138018930164e-20,
+        "is_significant": true
+      },
+      "separation": {
+        "cohens_d": 0.5472,
+        "overlap_percentage_estimate": 78.44
+      }
+    },
+    "a_mean": {
+      "descriptive": {
+        "bird": {
+          "mean": 33.3793,
+          "std": 21.8528,
+          "min": 0.2792,
+          "max": 68.2966
+        },
+        "drone": {
+          "mean": 45.7342,
+          "std": 26.336,
+          "min": 0.5746,
+          "max": 72.46
+        }
+      },
+      "hypothesis_test": {
+        "t_statistic": -8.8433,
+        "p_value": 3.3960555546872693e-18,
+        "is_significant": true
+      },
+      "separation": {
+        "cohens_d": 0.5106,
+        "overlap_percentage_estimate": 79.85
+      }
+    },
+    "heading_change_ratio": {
+      "descriptive": {
+        "bird": {
+          "mean": 0.1511,
+          "std": 0.0991,
+          "min": 0.0225,
+          "max": 0.399
+        },
+        "drone": {
+          "mean": 0.2161,
+          "std": 0.077,
+          "min": 0.1173,
+          "max": 0.3252
+        }
+      },
+      "hypothesis_test": {
+        "t_statistic": -12.6817,
+        "p_value": 1.4957484054891354e-34,
+        "is_significant": true
+      },
+      "separation": {
+        "cohens_d": 0.7325,
+        "overlap_percentage_estimate": 71.42
+      }
+    },
+    "maneuverability_sigma": {
+      "descriptive": {
+        "bird": {
+          "mean": 2.6502,
+          "std": 1.7794,
+          "min": 0.5742,
+          "max": 6.8904
+        },
+        "drone": {
+          "mean": 2.195,
+          "std": 1.2145,
+          "min": 1.1724,
+          "max": 5.001
+        }
+      },
+      "hypothesis_test": {
+        "t_statistic": 5.1761,
+        "p_value": 2.710111419674621e-07,
+        "is_significant": true
+      },
+      "separation": {
+        "cohens_d": 0.2988,
+        "overlap_percentage_estimate": 88.12
+      }
+    }
+  },
+  "engine_conclusion": {
+    "top_discriminant_feature": "v_mean",
+    "all_features_valid": true
+  }
+}
