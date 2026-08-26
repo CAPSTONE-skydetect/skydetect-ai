@@ -14,6 +14,8 @@ SkyDetect-AI.
 - `schemas.py`: shared models for A/B/C handoff
 - `tracking_schemas.py`: A-only manual tracking request and tuning models
 - `routers/analyze.py`: manual ROI tracking endpoint
+- `routers/ui.py`: browser upload, UI tracking response, and secure downloads
+- `static/`: drag-to-select ROI browser interface
 - `services/manual_roi_tracker.py`: KLT, appearance, motion, and CMC engine
 - `services/tracking_adapter.py`: shared `TrackSequence` contract adapter
 - `services/tracker.py`: API pipeline orchestration

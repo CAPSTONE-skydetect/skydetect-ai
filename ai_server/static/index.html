@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SkyDetect Manual ROI Tracker</title>
+    <link rel="stylesheet" href="/static/styles.css?v=manual-roi-1" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <span class="eyebrow">SKYDETECT · PART A</span>
+          <h1>Manual ROI Tracker</h1>
+        </div>
+        <span id="status" class="status" role="status">대기</span>
+      </header>
+
+      <section class="upload-band">
+        <form id="uploadForm" class="upload-form">
+          <label class="file-field">
+            <span>분석할 영상</span>
+            <input id="videoFile" name="file" type="file" accept="video/*" required />
+          </label>
+          <button id="uploadButton" type="submit">영상 준비</button>
+        </form>
+      </section>
+
+      <section class="workspace">
+        <div class="viewer">
+          <div class="video-stage">
+            <video id="sourceVideo" controls playsinline></video>
+            <canvas id="roiCanvas"></canvas>
+            <div id="emptyState" class="empty-state">
+              <b>영상이 아직 없습니다</b>
+              <span>위에서 영상을 선택해 주세요.</span>
+            </div>
+          </div>
+        </div>
+
+        <aside class="side-panel">
+          <div class="panel-head">
+            <div>
+              <span class="step-label">TARGET SETUP</span>
+              <h2>초기 객체 지정</h2>
+            </div>
+            <span id="videoMeta" class="video-meta">-</span>
+          </div>
+
+          <div class="panel-body">
+            <div class="input-grid two">
+              <label class="field">
+                <span>시작 프레임</span>
+                <input id="initFrame" type="number" min="0" step="1" value="0" />
+              </label>
+              <label class="field">
+                <span>현재 시간</span>
+                <input id="currentTime" type="number" min="0" step="0.01" value="0" />
+              </label>
+            </div>
+
+            <div class="input-grid two">
+              <label class="field">
+                <span>중심 X</span>
+                <input id="pointX" type="number" min="0" step="0.1" />
+              </label>
+              <label class="field">
+                <span>중심 Y</span>
+                <input id="pointY" type="number" min="0" step="0.1" />
+              </label>
+            </div>
+
+            <div class="input-grid two">
+              <label class="field">
+                <span>bbox W</span>
+                <input id="bboxW" type="number" min="4" step="1" value="32" />
+              </label>
+              <label class="field">
+                <span>bbox H</span>
+                <input id="bboxH" type="number" min="4" step="1" value="32" />
+              </label>
+            </div>
+
+            <div class="input-grid two">
+              <label class="field">
+                <span>추적 시간(초)</span>
+                <input id="maxSeconds" type="number" min="1" step="1" value="10" />
+              </label>
+              <label class="check-field">
+                <input id="stabilize" type="checkbox" checked />
+                <span>카메라 움직임 보정</span>
+              </label>
+            </div>
+
+            <details class="tuning-panel" open>
+              <summary>
+                <span>추적 민감도</span>
+                <button id="resetTuning" class="text-button" type="button">기본값</button>
+              </summary>
+
+              <label class="toggle-field">
+                <span>
+                  <b>온라인 외형 학습</b>
+                  <small>OFF면 처음 지정한 외형을 고정합니다.</small>
+                </span>
+                <span class="toggle-control">
+                  <input id="onlineUpdate" type="checkbox" />
+                  <output id="onlineUpdateValue">OFF</output>
+                </span>
+              </label>
+
+              <label class="range-field">
+                <span><b>유지 conf</b><output id="kltAcceptConfValue">0.40</output></span>
+                <input id="kltAcceptConf" type="range" min="0.10" max="0.95" step="0.01" value="0.40" />
+                <small>높이면 배경 고착은 줄지만 LOST 판정이 빨라집니다.</small>
+              </label>
+
+              <label class="range-field">
+                <span><b>재탐색 conf</b><output id="recoveryConfValue">0.58</output></span>
+                <input id="recoveryConf" type="range" min="0.10" max="0.95" step="0.01" value="0.58" />
+                <small>낮추면 재포착이 쉬워지지만 오탐 위험이 커집니다.</small>
+              </label>
+
+              <label id="updateConfField" class="range-field disabled">
+                <span><b>학습 conf</b><output id="updateConfValue">0.76</output></span>
+                <input id="updateConf" type="range" min="0.10" max="0.99" step="0.01" value="0.76" />
+                <small>확실한 KLT 프레임만 외형 모델에 반영합니다.</small>
+              </label>
+
+              <label class="range-field">
+                <span><b>검색 반경</b><output id="searchRadiusValue">2.5x</output></span>
+                <input id="searchRadius" type="range" min="1.0" max="8.0" step="0.1" value="2.5" />
+                <small>빠른 객체일수록 크게 설정하세요.</small>
+              </label>
+            </details>
+
+            <p id="selectionHint" class="selection-hint">
+              영상을 멈춘 뒤 객체 선택을 누르고 비행체 주변을 드래그하세요.
+            </p>
+
+            <div class="button-row">
+              <button id="selectButton" type="button" disabled>객체 선택</button>
+              <button id="clearButton" class="secondary" type="button" disabled>다시 선택</button>
+              <button id="trackButton" type="button" disabled>ROI 추적</button>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <section id="resultSection" class="result-section hidden">
+        <div class="result-head">
+          <div>
+            <span class="step-label">TRACK COMPLETE</span>
+            <h2>추적 결과</h2>
+            <p id="resultSummary" class="result-summary"></p>
+          </div>
+          <div class="download-row">
+            <a id="downloadTrack" class="download disabled" href="#" download>TrackSequence</a>
+            <a id="downloadTrajectory" class="download disabled" href="#" download>Trajectory CSV</a>
+            <a id="downloadMetrics" class="download disabled" href="#" download>Metrics</a>
+            <a id="downloadOverlay" class="download disabled" href="#" download>Overlay</a>
+          </div>
+        </div>
+
+        <dl id="resultMetrics" class="metric-grid"></dl>
+
+        <div id="overlayArea" class="result-detail hidden">
+          <video id="overlayVideo" controls playsinline></video>
+          <pre id="debugPanel"></pre>
+        </div>
+      </section>
+    </main>
+    <script src="/static/app.js?v=manual-roi-1"></script>
+  </body>
+</html>

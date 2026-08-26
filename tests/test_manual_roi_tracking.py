@@ -6,6 +6,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from ai_server.main import app
+from ai_server.routers import ui as ui_routes
 from ai_server.schemas import TrackSequence
 from ai_server.services.manual_roi_tracker import process_manual_roi_video
 from ai_server.tracking_schemas import TrackingTuning
@@ -135,6 +136,51 @@ def test_analyze_endpoint_returns_manual_roi_track(
         current.frame_index > previous.frame_index
         for previous, current in zip(track.history, track.history[1:])
     )
+
+
+def test_browser_ui_uploads_tracks_and_downloads_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    video_path = tmp_path / "ui_target.mp4"
+    _make_twenty_pixel_video(video_path, frame_count=20)
+    monkeypatch.setattr(ui_routes, "UPLOAD_DIR", tmp_path / "uploads")
+    monkeypatch.setattr(ui_routes, "OUTPUT_DIR", tmp_path / "outputs")
+    client = TestClient(app)
+
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "Manual ROI Tracker" in page.text
+    assert client.get("/static/app.js").status_code == 200
+
+    with video_path.open("rb") as handle:
+        upload = client.post(
+            "/api/videos/upload",
+            files={"file": ("ui_target.mp4", handle, "video/mp4")},
+        )
+    assert upload.status_code == 200
+    uploaded = upload.json()
+
+    response = client.post(
+        "/api/tracks/manual",
+        json={
+            "source_video_id": uploaded["source_video_id"],
+            "video_path": uploaded["video_path"],
+            "target_bbox": [40.0, 54.0, 32.0, 32.0],
+            "stabilize": False,
+            "resize_width": None,
+            "write_overlay": False,
+            "tuning": {"online_update_enabled": False},
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert len(result["tracks"][0]["history"]) >= 15
+    track_url = result["download_urls"]["track_sequence"]
+    download = client.get(track_url)
+    assert download.status_code == 200
+    TrackSequence.model_validate_json(download.content)
 
 
 def _make_twenty_pixel_video(
