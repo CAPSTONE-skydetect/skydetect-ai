@@ -21,7 +21,13 @@ The current contract owner is `ai_server/schemas.py`.
 
 ## Current Proposal
 
-- `TrackSequence.history` is the raw tracked sequence and should remain ordered by frame
+- `TrackSequence.history` contains accepted observations only and is strictly
+  ordered by frame without duplicates
+- Internal prediction-only frames are not part of `history`; their absence is a
+  frame-index gap
+- `TrackPoint` coordinates and sizes are normalized to `[0, 1]`
+- When stabilization is applied, `cx` and `cy` are camera-motion-compensated
+- `TrackPoint.conf` is observation confidence, not detector confidence
 - `StabilizationInfo` is included in `TrackSequence` so downstream stages know whether A applied global motion compensation
 - `TrackQuality` is included in `TrackSequence` so B/C can filter or inspect track reliability without recomputing basic metadata
 - Interpolation is not done by A and should happen in B
@@ -29,6 +35,5 @@ The current contract owner is `ai_server/schemas.py`.
 ## Review Items For Team
 
 - Confirm whether `stabilization` and `quality` should remain optional shared fields
-- Confirm normalized coordinate convention for `cx`, `cy`, `w`, `h`
 - Confirm whether `track_id` is video-local or globally unique
 - Confirm whether C wants a stricter schema than `quality: dict[str, str | int | float]`

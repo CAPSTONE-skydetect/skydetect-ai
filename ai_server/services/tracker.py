@@ -1,54 +1,37 @@
-from ai_server.schemas import StabilizationInfo, TrackPoint, TrackSequence
-from ai_server.utils.quality import build_track_quality
+from ai_server.schemas import AnalyzeResponse
+from ai_server.services.manual_roi_tracker import process_manual_roi_video
+from ai_server.services.tracking_video_io import TrackingVideoError
+from ai_server.tracking_schemas import ManualTrackingRequest
 
 
-def build_bootstrap_track(
-    track_id: int,
-    source_video_id: str,
-    stabilization: StabilizationInfo,
-) -> TrackSequence:
-    history = [
-        TrackPoint(
-            frame_index=0,
-            timestamp_ms=0,
-            cx=0.40,
-            cy=0.62,
-            w=0.03,
-            h=0.02,
-            conf=0.91,
+class AnalyzePipelineError(ValueError):
+    """Raised when a valid API request cannot be processed as a video track."""
+
+
+def run_manual_tracking_pipeline(
+    payload: ManualTrackingRequest,
+) -> AnalyzeResponse:
+    try:
+        result = process_manual_roi_video(
+            payload.video_path,
+            source_video_id=payload.source_video_id,
+            target_bbox=payload.target_bbox,
+            init_frame_index=payload.init_frame_index,
+            max_seconds=payload.max_seconds,
+            stabilize=payload.stabilize,
+            track_id=payload.track_id,
+            tuning=payload.tuning,
+            resize_width=payload.resize_width,
+            write_overlay=payload.write_overlay,
+        )
+    except (TrackingVideoError, ValueError) as exc:
+        raise AnalyzePipelineError(str(exc)) from exc
+
+    return AnalyzeResponse(
+        source_video_id=payload.source_video_id,
+        tracks=[result.track],
+        message=(
+            "Manual ROI tracking complete: "
+            f"{len(result.track.history)} observed frames."
         ),
-        TrackPoint(
-            frame_index=1,
-            timestamp_ms=40,
-            cx=0.42,
-            cy=0.60,
-            w=0.03,
-            h=0.02,
-            conf=0.90,
-        ),
-        TrackPoint(
-            frame_index=2,
-            timestamp_ms=80,
-            cx=0.44,
-            cy=0.58,
-            w=0.04,
-            h=0.03,
-            conf=0.89,
-        ),
-        TrackPoint(
-            frame_index=3,
-            timestamp_ms=120,
-            cx=0.47,
-            cy=0.56,
-            w=0.04,
-            h=0.03,
-            conf=0.88,
-        ),
-    ]
-    return TrackSequence(
-        track_id=track_id,
-        source_video_id=source_video_id,
-        stabilization=stabilization,
-        history=history,
-        quality=build_track_quality(history),
     )

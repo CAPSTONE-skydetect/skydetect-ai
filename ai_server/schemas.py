@@ -42,7 +42,12 @@ class StrictModel(BaseModel):
 # =============================================================================
 # 한 줄 설명:
 #   반복해서 쓰는 Literal 타입을 별칭으로 빼서 가독성과 일관성을 높인다.
-StabilizationMethod = Literal["none", "ffmpeg_vidstab", "opencv_ecc"]
+StabilizationMethod = Literal[
+    "none",
+    "ffmpeg_vidstab",
+    "opencv_ecc",
+    "opencv_feature_cmc",
+]
 TrackStability = Literal["good", "fair", "poor"]
 PredictionLabel = Literal["bird", "drone", "uncertain"]
 FeatureStatus = Literal["ok", "partial", "failed"]
@@ -106,7 +111,7 @@ class TrackPoint(StrictModel):
     cy: float = Field(..., ge=0.0, le=1.0, description="바운딩박스 중심 y (정규화)")
     w: float = Field(..., ge=0.0, le=1.0, description="바운딩박스 너비 (정규화)")
     h: float = Field(..., ge=0.0, le=1.0, description="바운딩박스 높이 (정규화)")
-    conf: float = Field(..., ge=0.0, le=1.0, description="해당 프레임의 탐지 신뢰도")
+    conf: float = Field(..., ge=0.0, le=1.0, description="해당 프레임의 관측 신뢰도")
 
 
 class TrackQuality(StrictModel):
@@ -158,6 +163,17 @@ class TrackSequence(StrictModel):
     source_video_id: str | None = None
     stabilization: StabilizationInfo | None = None
     quality: TrackQuality | None = None
+
+    @model_validator(mode="after")
+    def validate_history_order(self) -> "TrackSequence":
+        for previous, current in zip(self.history, self.history[1:]):
+            if current.frame_index <= previous.frame_index:
+                raise ValueError(
+                    "history must be strictly ordered by frame_index without duplicates"
+                )
+            if current.timestamp_ms < previous.timestamp_ms:
+                raise ValueError("history timestamp_ms must not go backwards")
+        return self
 
 
 # =============================================================================
@@ -493,12 +509,12 @@ class BatchPredictionResult(StrictModel):
 
 
 # =============================================================================
-# 현재 A bootstrap server 호환용 모델
+# A API 호환용 모델
 # =============================================================================
 
 class AnalyzeRequest(StrictModel):
     """
-    현재 A bootstrap server와 호환되는 분석 요청 모델.
+    이전 A bootstrap server와 호환되는 분석 요청 모델.
 
     한 줄 설명:
         기존 A 서버가 받는 입력 형식을 유지하기 위한 호환용 DTO.
@@ -516,7 +532,7 @@ class AnalyzeRequest(StrictModel):
 
 class AnalyzeResponse(StrictModel):
     """
-    현재 A bootstrap server와 호환되는 분석 응답 모델.
+    A server 분석 응답 모델.
 
     한 줄 설명:
         기존 A 서버가 반환하는 형식을 유지하기 위한 호환용 DTO.
