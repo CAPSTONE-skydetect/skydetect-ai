@@ -58,6 +58,11 @@ class BatchRunner:
             current_max_frames,
             apply_noise,
         )
+        drift_profile = self._sample_tracking_drift_profile(
+            rng,
+            current_max_frames,
+            apply_noise,
+        )
 
         if scenario == "steady_cruise":
             # 시나리오 A: 낮은 풍속과 안정적인 직선 기조 유도
@@ -104,6 +109,7 @@ class BatchRunner:
                 "event_schedule": event_schedule,
                 "frame_length_bucket": frame_length_bucket,
                 "target_frame_count": int(current_max_frames),
+                "tracking_drift_profile": drift_profile,
                 "dropout_profile": dropout_profile,
                 "wind_speed": round(wind_speed, 2),
                 "fps": self.fps
@@ -170,6 +176,12 @@ class BatchRunner:
             obs = agent.get_observation(frame_index=frame, apply_noise=apply_noise)
             sim_entry["observations"].append(obs)
 
+        sim_entry["observations"], sim_entry["metadata"]["tracking_drift_profile"] = (
+            self._apply_tracking_drift_noise(
+                sim_entry["observations"],
+                drift_profile,
+            )
+        )
         sim_entry["observations"], sim_entry["metadata"]["dropout_profile"] = (
             self._apply_dropout_noise(
                 sim_entry["observations"],
@@ -314,6 +326,121 @@ class BatchRunner:
             self._ratio_frame(ratio, frame_count)
             for ratio in np.linspace(low_ratio, high_ratio, count)
         ]
+
+    def _sample_tracking_drift_profile(
+        self,
+        rng: np.random.Generator,
+        frame_count: int,
+        apply_noise: bool,
+    ) -> dict:
+        """
+        추적기가 일정 구간 한 방향으로 서서히 밀렸다가 회복되는 관측 좌표 drift를 계획한다.
+        drift 크기는 정규화 화면 좌표 기준이며, 실제 물체 운동과 섞이지 않도록 작게 제한한다.
+        """
+        if not apply_noise or frame_count < 30:
+            return {
+                "enabled": False,
+                "start": None,
+                "peak": None,
+                "end": None,
+                "recover": False,
+                "max_dx": 0.0,
+                "max_dy": 0.0,
+                "duration": 0,
+                "affected_frame_count": 0,
+                "clipped_frame_count": 0,
+            }
+
+        if rng.random() < 0.25:
+            return {
+                "enabled": False,
+                "start": None,
+                "peak": None,
+                "end": None,
+                "recover": False,
+                "max_dx": 0.0,
+                "max_dy": 0.0,
+                "duration": 0,
+                "affected_frame_count": 0,
+                "clipped_frame_count": 0,
+            }
+
+        drift_start = self._ratio_frame(rng.uniform(0.15, 0.55), frame_count)
+        ramp_len = int(rng.integers(10, min(45, max(11, frame_count // 5)) + 1))
+        hold_len = int(rng.integers(8, min(55, max(9, frame_count // 4)) + 1))
+        recover = bool(rng.random() < 0.70)
+        recover_len = (
+            int(rng.integers(10, min(50, max(11, frame_count // 5)) + 1))
+            if recover
+            else 0
+        )
+
+        drift_peak = min(drift_start + ramp_len, frame_count - 2)
+        drift_end = min(drift_peak + hold_len + recover_len, frame_count - 2)
+        angle = float(rng.uniform(0.0, 2.0 * np.pi))
+        magnitude = float(rng.uniform(0.008, 0.035))
+
+        return {
+            "enabled": True,
+            "start": drift_start,
+            "peak": drift_peak,
+            "end": drift_end,
+            "recover": recover,
+            "max_dx": round(float(np.cos(angle) * magnitude), 4),
+            "max_dy": round(float(np.sin(angle) * magnitude), 4),
+            "duration": int(drift_end - drift_start + 1),
+            "affected_frame_count": 0,
+            "clipped_frame_count": 0,
+        }
+
+    def _apply_tracking_drift_noise(
+        self,
+        observations: list[dict],
+        profile: dict,
+    ) -> tuple[list[dict], dict]:
+        """
+        frame_index를 기준으로 drift offset을 누적 적용한다. bbox와 conf는 건드리지 않는다.
+        """
+        if not profile["enabled"]:
+            return observations, profile
+
+        drifted = []
+        affected_frame_count = 0
+        clipped_frame_count = 0
+
+        for obs in observations:
+            frame_index = int(obs["frame_index"])
+            if not profile["start"] <= frame_index <= profile["end"]:
+                drifted.append(obs)
+                continue
+
+            if frame_index <= profile["peak"]:
+                phase = (frame_index - profile["start"]) / max(profile["peak"] - profile["start"], 1)
+                scale = np.clip(phase, 0.0, 1.0)
+            elif profile["recover"]:
+                phase = (frame_index - profile["peak"]) / max(profile["end"] - profile["peak"], 1)
+                scale = 1.0 - np.clip(phase, 0.0, 1.0)
+            else:
+                scale = 1.0
+
+            raw_cx = obs["cx"] + (profile["max_dx"] * scale)
+            raw_cy = obs["cy"] + (profile["max_dy"] * scale)
+            cx = float(np.clip(raw_cx, 0.0, 1.0))
+            cy = float(np.clip(raw_cy, 0.0, 1.0))
+
+            updated_obs = obs.copy()
+            updated_obs["cx"] = round(cx, 4)
+            updated_obs["cy"] = round(cy, 4)
+            drifted.append(updated_obs)
+
+            affected_frame_count += 1
+            if raw_cx != cx or raw_cy != cy:
+                clipped_frame_count += 1
+
+        updated_profile = profile.copy()
+        updated_profile["affected_frame_count"] = affected_frame_count
+        updated_profile["clipped_frame_count"] = clipped_frame_count
+        return drifted, updated_profile
 
     def _sample_dropout_profile(
         self,
