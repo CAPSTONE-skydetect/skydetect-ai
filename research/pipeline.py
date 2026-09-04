@@ -49,6 +49,11 @@ class BatchRunner:
         start_pos = self._sample_start_position(rng)
         base_goal = self._sample_goal_position(rng, start_pos)
         start_speed = rng.uniform(10.0, 14.0)
+        event_schedule = self._sample_event_schedule(
+            scenario,
+            current_max_frames,
+            rng,
+        )
 
         if scenario == "steady_cruise":
             # 시나리오 A: 낮은 풍속과 안정적인 직선 기조 유도
@@ -92,6 +97,7 @@ class BatchRunner:
                 "start_pos": [round(float(value), 2) for value in start_pos],
                 "start_speed": round(float(start_speed), 2),
                 "initial_goal_pos": [round(float(value), 2) for value in goal_pos],
+                "event_schedule": event_schedule,
                 "wind_speed": round(wind_speed, 2),
                 "fps": self.fps
             },
@@ -103,16 +109,17 @@ class BatchRunner:
             
             # [시나리오 동적 제어 레이어 구현]
             if scenario == "sudden_dash":
-                if frame == 100:
+                if frame == event_schedule["dash_frame"]:
                     # 목적지를 순식간에 전방으로 멀리 이동시켜 급가속(Dash) 유도
                     env.x_goal[0] += 250.0
-                elif frame == 200:
+                elif frame == event_schedule["brake_frame"]:
                     # 목적지를 기체 바로 뒤쪽으로 배치하여 급브레이크(Braking) 기동 강제
                     env.x_goal = agent.pos - (agent.u * 60.0)
 
             elif scenario == "sharp_turns":
                 # 지그재그 및 연속적인 예각 선회 유도 (슬라롬 기동)
-                if frame == 60:
+                turn_frames = event_schedule["turn_frames"]
+                if frame == turn_frames[0]:
                     env.x_goal = np.array(
                         [
                             max(agent.pos[0] + 140.0, base_goal[0] * 0.70),
@@ -120,7 +127,7 @@ class BatchRunner:
                             np.clip(base_goal[2] + 35.0, 20.0, 180.0),
                         ]
                     )
-                elif frame == 140:
+                elif frame == turn_frames[1]:
                     env.x_goal = np.array(
                         [
                             max(agent.pos[0] + 140.0, base_goal[0] * 0.88),
@@ -128,7 +135,7 @@ class BatchRunner:
                             np.clip(base_goal[2] - 45.0, 20.0, 180.0),
                         ]
                     )
-                elif frame == 220:
+                elif frame == turn_frames[2]:
                     env.x_goal = np.array(
                         [
                             max(agent.pos[0] + 180.0, base_goal[0]),
@@ -140,9 +147,9 @@ class BatchRunner:
             elif scenario == "multi_mode":
                 # 임무 기반 다중 모드: 100~180 프레임 구간 동안 목적지를 현재 위치로 고정하여
                 # 드론에게는 호버링(Hovering)을, 새에게는 제자리 선회(Circling) 루프 유도
-                if 100 <= frame <= 180:
+                if event_schedule["hover_start"] <= frame <= event_schedule["hover_end"]:
                     env.x_goal = agent.pos.copy()
-                elif frame == 181:
+                elif frame == event_schedule["hover_end"] + 1:
                     env.x_goal = np.array([base_goal[0] + 150.0, base_goal[1], base_goal[2]])
 
             # 물리 모델 1스텝 구동 (3D 좌표 변위 계산)
@@ -204,6 +211,75 @@ class BatchRunner:
             dtype=float,
         )
         return [float(value) for value in fallback]
+
+    def _sample_event_schedule(
+        self,
+        scenario: str,
+        frame_count: int,
+        rng: np.random.Generator,
+    ) -> dict[str, int | list[int]]:
+        """
+        시나리오 이벤트가 특정 프레임 번호에 고정되지 않도록 전체 길이 비율로 샘플링한다.
+        """
+        if scenario == "sudden_dash":
+            dash_frame = self._ratio_frame(rng.uniform(0.25, 0.55), frame_count)
+            brake_frame = self._ratio_frame(rng.uniform(0.60, 0.85), frame_count)
+            brake_frame = max(brake_frame, min(frame_count - 2, dash_frame + 8))
+            return {
+                "dash_frame": dash_frame,
+                "brake_frame": brake_frame,
+            }
+
+        if scenario == "sharp_turns":
+            turn_frames = self._sample_spaced_frames(
+                rng,
+                frame_count=frame_count,
+                count=3,
+                low_ratio=0.20,
+                high_ratio=0.82,
+                min_gap=6,
+            )
+            return {"turn_frames": turn_frames}
+
+        if scenario == "multi_mode":
+            hover_start = self._ratio_frame(rng.uniform(0.25, 0.50), frame_count)
+            hover_end = self._ratio_frame(rng.uniform(0.58, 0.82), frame_count)
+            hover_end = max(hover_end, min(frame_count - 3, hover_start + 12))
+            return {
+                "hover_start": hover_start,
+                "hover_end": hover_end,
+            }
+
+        return {}
+
+    def _ratio_frame(self, ratio: float, frame_count: int) -> int:
+        return int(np.clip(round(frame_count * ratio), 1, max(frame_count - 2, 1)))
+
+    def _sample_spaced_frames(
+        self,
+        rng: np.random.Generator,
+        *,
+        frame_count: int,
+        count: int,
+        low_ratio: float,
+        high_ratio: float,
+        min_gap: int,
+    ) -> list[int]:
+        for _ in range(100):
+            frames = sorted(
+                self._ratio_frame(ratio, frame_count)
+                for ratio in rng.uniform(low_ratio, high_ratio, size=count)
+            )
+            if all(
+                current - previous >= min_gap
+                for previous, current in zip(frames, frames[1:])
+            ):
+                return frames
+
+        return [
+            self._ratio_frame(ratio, frame_count)
+            for ratio in np.linspace(low_ratio, high_ratio, count)
+        ]
 
     def execute_batch_pipeline(self, bird_samples_per_species: int = 50, drone_samples_per_model: int = 150, apply_noise: bool = False) -> str:
         """
