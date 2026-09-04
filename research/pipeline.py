@@ -45,8 +45,12 @@ class BatchRunner:
         frame_length_bucket, current_max_frames = self._sample_frame_length(rng)
 
         # 2️. 시나리오별 맞춤형 환경 변수(가변 변수) 세분화 설정
-        start_pos = self._sample_start_position(rng)
-        base_goal = self._sample_goal_position(rng, start_pos)
+        bbox_depth_profile = self._sample_bbox_depth_profile(
+            rng,
+            current_max_frames,
+        )
+        start_pos = self._sample_start_position(rng, bbox_depth_profile)
+        base_goal = self._sample_goal_position(rng, start_pos, bbox_depth_profile)
         start_speed = rng.uniform(10.0, 14.0)
         event_schedule = self._sample_event_schedule(
             scenario,
@@ -106,6 +110,7 @@ class BatchRunner:
                 "start_pos": [round(float(value), 2) for value in start_pos],
                 "start_speed": round(float(start_speed), 2),
                 "initial_goal_pos": [round(float(value), 2) for value in goal_pos],
+                "bbox_depth_profile": bbox_depth_profile,
                 "event_schedule": event_schedule,
                 "frame_length_bucket": frame_length_bucket,
                 "target_frame_count": int(current_max_frames),
@@ -119,6 +124,7 @@ class BatchRunner:
 
         # 4️. 내부 루프 (Sample Loop): 300 프레임 시뮬레이션 타임라인 제어
         for frame in range(current_max_frames):
+            self._apply_bbox_depth_waypoint(env, frame, bbox_depth_profile)
             
             # [시나리오 동적 제어 레이어 구현]
             if scenario == "sudden_dash":
@@ -211,15 +217,58 @@ class BatchRunner:
         low, high = ranges[bucket]
         return bucket, int(rng.integers(low, high + 1))
 
-    def _sample_start_position(self, rng: np.random.Generator) -> list[float]:
+    def _sample_bbox_depth_profile(
+        self,
+        rng: np.random.Generator,
+        frame_count: int,
+    ) -> dict:
+        """
+        bbox 크기가 y 거리 변화와 연결되도록 depth 이동 패턴을 샘플링한다.
+        """
+        mode = str(
+            rng.choice(
+                ["approaching", "receding", "crossing", "passing_by"],
+                p=[0.30, 0.30, 0.25, 0.15],
+            )
+        )
+        profile = {
+            "mode": mode,
+            "switch_frame": None,
+            "near_y": None,
+            "far_y": None,
+        }
+
+        if mode == "passing_by":
+            profile["switch_frame"] = self._ratio_frame(
+                rng.uniform(0.42, 0.65),
+                frame_count,
+            )
+            profile["near_y"] = round(float(rng.uniform(50.0, 75.0)), 2)
+            profile["far_y"] = round(float(rng.uniform(130.0, 210.0)), 2)
+
+        return profile
+
+    def _sample_start_position(
+        self,
+        rng: np.random.Generator,
+        bbox_depth_profile: dict,
+    ) -> list[float]:
         """
         실제 촬영 상황의 다양성을 반영하기 위해 초기 위치 범위를 넓게 샘플링한다.
         A가 넘기는 history는 관측된 객체에서 시작하므로, 초기 x는 화면 안쪽으로 제한한다.
         현재 관측 모델은 goal 기반 화면 스케일을 쓰므로, 시작 z도 보수적으로 넓힌다.
         """
+        mode = bbox_depth_profile["mode"]
+        if mode in ("approaching", "passing_by"):
+            start_y = rng.uniform(125.0, 180.0)
+        elif mode == "receding":
+            start_y = rng.uniform(55.0, 95.0)
+        else:
+            start_y = rng.uniform(70.0, 170.0)
+
         return [
             float(rng.uniform(0.0, 70.0)),
-            float(rng.uniform(55.0, 180.0)),
+            float(start_y),
             float(rng.uniform(50.0, 105.0)),
         ]
 
@@ -227,6 +276,7 @@ class BatchRunner:
         self,
         rng: np.random.Generator,
         start_pos: list[float],
+        bbox_depth_profile: dict,
     ) -> list[float]:
         """
         샘플별 목표 위치를 다양화하되 시작점과 너무 가까운 목표는 피한다.
@@ -234,10 +284,15 @@ class BatchRunner:
         """
         start = np.array(start_pos, dtype=float)
         for _ in range(100):
+            goal_y = self._sample_goal_y_for_bbox_mode(
+                rng,
+                start[1],
+                bbox_depth_profile,
+            )
             candidate = np.array(
                 [
                     rng.uniform(120.0, 600.0),
-                    rng.uniform(-150.0, 220.0),
+                    goal_y,
                     rng.uniform(20.0, 180.0),
                 ],
                 dtype=float,
@@ -251,12 +306,41 @@ class BatchRunner:
         fallback = np.array(
             [
                 max(start[0] + 180.0, 180.0),
-                start[1] + rng.uniform(-80.0, 80.0),
+                self._sample_goal_y_for_bbox_mode(rng, start[1], bbox_depth_profile),
                 np.clip(start[2] + rng.uniform(-45.0, 45.0), 20.0, 180.0),
             ],
             dtype=float,
         )
         return [float(value) for value in fallback]
+
+    def _sample_goal_y_for_bbox_mode(
+        self,
+        rng: np.random.Generator,
+        start_y: float,
+        bbox_depth_profile: dict,
+    ) -> float:
+        mode = bbox_depth_profile["mode"]
+        if mode == "approaching":
+            return float(rng.uniform(50.0, 85.0))
+        if mode == "receding":
+            return float(rng.uniform(140.0, 220.0))
+        if mode == "crossing":
+            return float(np.clip(start_y + rng.uniform(-18.0, 18.0), 50.0, 220.0))
+        return float(bbox_depth_profile["far_y"])
+
+    def _apply_bbox_depth_waypoint(
+        self,
+        env: Environment,
+        frame: int,
+        bbox_depth_profile: dict,
+    ) -> None:
+        if bbox_depth_profile["mode"] != "passing_by":
+            return
+
+        if frame <= bbox_depth_profile["switch_frame"]:
+            env.x_goal[1] = bbox_depth_profile["near_y"]
+        else:
+            env.x_goal[1] = bbox_depth_profile["far_y"]
 
     def _sample_event_schedule(
         self,
