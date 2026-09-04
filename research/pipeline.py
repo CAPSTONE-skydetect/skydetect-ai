@@ -53,6 +53,11 @@ class BatchRunner:
             current_max_frames,
             rng,
         )
+        dropout_profile = self._sample_dropout_profile(
+            rng,
+            current_max_frames,
+            apply_noise,
+        )
 
         if scenario == "steady_cruise":
             # 시나리오 A: 낮은 풍속과 안정적인 직선 기조 유도
@@ -99,6 +104,7 @@ class BatchRunner:
                 "event_schedule": event_schedule,
                 "frame_length_bucket": frame_length_bucket,
                 "target_frame_count": int(current_max_frames),
+                "dropout_profile": dropout_profile,
                 "wind_speed": round(wind_speed, 2),
                 "fps": self.fps
             },
@@ -163,6 +169,14 @@ class BatchRunner:
             # 2D 관측 데이터 슬라이싱 투영 및 기록
             obs = agent.get_observation(frame_index=frame, apply_noise=apply_noise)
             sim_entry["observations"].append(obs)
+
+        sim_entry["observations"], sim_entry["metadata"]["dropout_profile"] = (
+            self._apply_dropout_noise(
+                sim_entry["observations"],
+                dropout_profile,
+                rng,
+            )
+        )
 
         return sim_entry
 
@@ -300,6 +314,139 @@ class BatchRunner:
             self._ratio_frame(ratio, frame_count)
             for ratio in np.linspace(low_ratio, high_ratio, count)
         ]
+
+    def _sample_dropout_profile(
+        self,
+        rng: np.random.Generator,
+        frame_count: int,
+        apply_noise: bool,
+    ) -> dict:
+        """
+        실제 A 산출물처럼 일부 프레임은 history에서 사라지도록 dropout 계획을 만든다.
+        ideal 데이터는 연속 프레임 유지, noisy 데이터만 gap/dropout을 갖는다.
+        """
+        if not apply_noise or frame_count < 4:
+            return {
+                "enabled": False,
+                "random_dropout_rate": 0.0,
+                "random_dropout_frames": [],
+                "burst_ranges": [],
+                "low_conf_ranges": [],
+                "dropped_frame_count": 0,
+                "low_conf_frame_count": 0,
+                "missing_ratio": 0.0,
+            }
+
+        candidate_frames = np.arange(1, frame_count - 1)
+        random_dropout_rate = float(rng.uniform(0.02, 0.08))
+        random_count = int(
+            np.clip(
+                round(frame_count * random_dropout_rate),
+                1,
+                len(candidate_frames),
+            )
+        )
+        random_dropout_frames = sorted(
+            int(frame)
+            for frame in rng.choice(candidate_frames, size=random_count, replace=False)
+        )
+
+        burst_ranges = []
+        max_burst_len = min(20, max(3, frame_count // 8))
+        burst_count = int(rng.choice([0, 1, 2], p=[0.25, 0.60, 0.15]))
+        for _ in range(burst_count):
+            if frame_count <= 8:
+                break
+            length = int(rng.integers(3, max_burst_len + 1))
+            start = int(rng.integers(1, max(frame_count - length, 2)))
+            burst_ranges.append(
+                {
+                    "start": start,
+                    "end": min(start + length - 1, frame_count - 2),
+                }
+            )
+
+        low_conf_ranges = []
+        low_conf_count = int(rng.choice([0, 1], p=[0.35, 0.65]))
+        max_low_conf_len = min(45, max(8, frame_count // 4))
+        for _ in range(low_conf_count):
+            if frame_count <= 12:
+                break
+            length = int(rng.integers(8, max_low_conf_len + 1))
+            start = int(rng.integers(1, max(frame_count - length, 2)))
+            low_conf_ranges.append(
+                {
+                    "start": start,
+                    "end": min(start + length - 1, frame_count - 2),
+                    "conf_min": round(float(rng.uniform(0.45, 0.55)), 2),
+                    "conf_max": round(float(rng.uniform(0.62, 0.72)), 2),
+                }
+            )
+
+        return {
+            "enabled": True,
+            "random_dropout_rate": round(random_dropout_rate, 4),
+            "random_dropout_frames": random_dropout_frames,
+            "burst_ranges": burst_ranges,
+            "low_conf_ranges": low_conf_ranges,
+            "dropped_frame_count": 0,
+            "low_conf_frame_count": 0,
+            "missing_ratio": 0.0,
+        }
+
+    def _apply_dropout_noise(
+        self,
+        observations: list[dict],
+        profile: dict,
+        rng: np.random.Generator,
+    ) -> tuple[list[dict], dict]:
+        """
+        frame_index/timestamp_ms는 보존하고 관측 row만 제거하여 실제 track gap을 만든다.
+        """
+        if not profile["enabled"]:
+            return observations, profile
+
+        available_frames = {int(obs["frame_index"]) for obs in observations}
+        drop_frames = set(profile["random_dropout_frames"])
+        for burst_range in profile["burst_ranges"]:
+            drop_frames.update(range(burst_range["start"], burst_range["end"] + 1))
+
+        drop_frames &= available_frames
+        retained = []
+        low_conf_frame_count = 0
+
+        for obs in observations:
+            frame_index = int(obs["frame_index"])
+            if frame_index in drop_frames:
+                continue
+
+            updated_obs = obs.copy()
+            for low_conf_range in profile["low_conf_ranges"]:
+                if low_conf_range["start"] <= frame_index <= low_conf_range["end"]:
+                    updated_obs["conf"] = round(
+                        float(
+                            min(
+                                updated_obs["conf"],
+                                rng.uniform(
+                                    low_conf_range["conf_min"],
+                                    low_conf_range["conf_max"],
+                                ),
+                            )
+                        ),
+                        2,
+                    )
+                    low_conf_frame_count += 1
+                    break
+            retained.append(updated_obs)
+
+        updated_profile = profile.copy()
+        updated_profile["dropped_frame_count"] = len(observations) - len(retained)
+        updated_profile["low_conf_frame_count"] = low_conf_frame_count
+        updated_profile["missing_ratio"] = round(
+            updated_profile["dropped_frame_count"] / max(len(observations), 1),
+            4,
+        )
+        return retained, updated_profile
 
     def execute_batch_pipeline(self, bird_samples_per_species: int = 50, drone_samples_per_model: int = 150, apply_noise: bool = False) -> str:
         """
