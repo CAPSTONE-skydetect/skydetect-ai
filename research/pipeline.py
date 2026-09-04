@@ -47,7 +47,7 @@ class BatchRunner:
 
         # 2️. 시나리오별 맞춤형 환경 변수(가변 변수) 세분화 설정
         base_goal = [300.0, 50.0, 50.0]  # 기본 목적지 공간 좌표
-        start_pos = [0.0, rng.uniform(75.0, 85.0), rng.uniform(95.0, 105.0)]
+        start_pos = self._sample_start_position(rng)
         start_speed = rng.uniform(10.0, 14.0)
 
         if scenario == "steady_cruise":
@@ -89,6 +89,8 @@ class BatchRunner:
                 "sample_id": sample_id,
                 "label": "bird" if agent_type == "bird" else "drone",
                 "scenario": scenario,
+                "start_pos": [round(float(value), 2) for value in start_pos],
+                "start_speed": round(float(start_speed), 2),
                 "wind_speed": round(wind_speed, 2),
                 "fps": self.fps
             },
@@ -136,6 +138,18 @@ class BatchRunner:
             sim_entry["observations"].append(obs)
 
         return sim_entry
+
+    def _sample_start_position(self, rng: np.random.Generator) -> list[float]:
+        """
+        실제 촬영 상황의 다양성을 반영하기 위해 초기 위치 범위를 넓게 샘플링한다.
+        현재 관측 모델은 goal 기반 화면 스케일을 쓰므로, 시작 z를 과도하게 높이면
+        cy가 0에 붙는 샘플이 많아진다. 목표 위치 다양화 전까지는 보수적으로 넓힌다.
+        """
+        return [
+            float(rng.uniform(-25.0, 70.0)),
+            float(rng.uniform(55.0, 180.0)),
+            float(rng.uniform(50.0, 105.0)),
+        ]
 
     def execute_batch_pipeline(self, bird_samples_per_species: int = 50, drone_samples_per_model: int = 150, apply_noise: bool = False) -> str:
         """
