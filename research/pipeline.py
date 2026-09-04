@@ -46,15 +46,15 @@ class BatchRunner:
         current_max_frames = rng.integers(90, 301) if apply_noise else self.max_frames
 
         # 2️. 시나리오별 맞춤형 환경 변수(가변 변수) 세분화 설정
-        base_goal = [300.0, 50.0, 50.0]  # 기본 목적지 공간 좌표
         start_pos = self._sample_start_position(rng)
+        base_goal = self._sample_goal_position(rng, start_pos)
         start_speed = rng.uniform(10.0, 14.0)
 
         if scenario == "steady_cruise":
             # 시나리오 A: 낮은 풍속과 안정적인 직선 기조 유도
             wind_speed = rng.uniform(1.0, 3.0)
             gust_intensity = rng.uniform(0.1, 0.3)
-            goal_pos = [base_goal[0] + rng.uniform(-10, 10), base_goal[1], base_goal[2]]
+            goal_pos = base_goal.copy()
 
         elif scenario == "sudden_dash":
             # 시나리오 B: 중간 풍속 및 전방 대시 기동 유도
@@ -91,6 +91,7 @@ class BatchRunner:
                 "scenario": scenario,
                 "start_pos": [round(float(value), 2) for value in start_pos],
                 "start_speed": round(float(start_speed), 2),
+                "initial_goal_pos": [round(float(value), 2) for value in goal_pos],
                 "wind_speed": round(wind_speed, 2),
                 "fps": self.fps
             },
@@ -112,11 +113,29 @@ class BatchRunner:
             elif scenario == "sharp_turns":
                 # 지그재그 및 연속적인 예각 선회 유도 (슬라롬 기동)
                 if frame == 60:
-                    env.x_goal = np.array([agent.pos[0] + 50.0, 180.0, 90.0])
+                    env.x_goal = np.array(
+                        [
+                            max(agent.pos[0] + 140.0, base_goal[0] * 0.70),
+                            base_goal[1] + 120.0,
+                            np.clip(base_goal[2] + 35.0, 20.0, 180.0),
+                        ]
+                    )
                 elif frame == 140:
-                    env.x_goal = np.array([agent.pos[0] + 50.0, -80.0, 40.0])
+                    env.x_goal = np.array(
+                        [
+                            max(agent.pos[0] + 140.0, base_goal[0] * 0.88),
+                            base_goal[1] - 120.0,
+                            np.clip(base_goal[2] - 45.0, 20.0, 180.0),
+                        ]
+                    )
                 elif frame == 220:
-                    env.x_goal = np.array([agent.pos[0] + 80.0, 50.0, 60.0])
+                    env.x_goal = np.array(
+                        [
+                            max(agent.pos[0] + 180.0, base_goal[0]),
+                            base_goal[1],
+                            base_goal[2],
+                        ]
+                    )
 
             elif scenario == "multi_mode":
                 # 임무 기반 다중 모드: 100~180 프레임 구간 동안 목적지를 현재 위치로 고정하여
@@ -150,6 +169,41 @@ class BatchRunner:
             float(rng.uniform(55.0, 180.0)),
             float(rng.uniform(50.0, 105.0)),
         ]
+
+    def _sample_goal_position(
+        self,
+        rng: np.random.Generator,
+        start_pos: list[float],
+    ) -> list[float]:
+        """
+        샘플별 목표 위치를 다양화하되 시작점과 너무 가까운 목표는 피한다.
+        가까운 목표는 짧은 회전이나 정지 패턴을 과도하게 만들 수 있다.
+        """
+        start = np.array(start_pos, dtype=float)
+        for _ in range(100):
+            candidate = np.array(
+                [
+                    rng.uniform(120.0, 600.0),
+                    rng.uniform(-150.0, 220.0),
+                    rng.uniform(20.0, 180.0),
+                ],
+                dtype=float,
+            )
+            if (
+                np.linalg.norm(candidate - start) >= 150.0
+                and abs(candidate[0] - start[0]) >= 90.0
+            ):
+                return [float(value) for value in candidate]
+
+        fallback = np.array(
+            [
+                max(start[0] + 180.0, 180.0),
+                start[1] + rng.uniform(-80.0, 80.0),
+                np.clip(start[2] + rng.uniform(-45.0, 45.0), 20.0, 180.0),
+            ],
+            dtype=float,
+        )
+        return [float(value) for value in fallback]
 
     def execute_batch_pipeline(self, bird_samples_per_species: int = 50, drone_samples_per_model: int = 150, apply_noise: bool = False) -> str:
         """
