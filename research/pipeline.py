@@ -57,6 +57,11 @@ class BatchRunner:
             current_max_frames,
             rng,
         )
+        camera_motion_profile = self._sample_camera_motion_profile(
+            rng,
+            current_max_frames,
+            apply_noise,
+        )
         dropout_profile = self._sample_dropout_profile(
             rng,
             current_max_frames,
@@ -111,6 +116,7 @@ class BatchRunner:
                 "start_speed": round(float(start_speed), 2),
                 "initial_goal_pos": [round(float(value), 2) for value in goal_pos],
                 "bbox_depth_profile": bbox_depth_profile,
+                "camera_motion_profile": camera_motion_profile,
                 "event_schedule": event_schedule,
                 "frame_length_bucket": frame_length_bucket,
                 "target_frame_count": int(current_max_frames),
@@ -182,6 +188,12 @@ class BatchRunner:
             obs = agent.get_observation(frame_index=frame, apply_noise=apply_noise)
             sim_entry["observations"].append(obs)
 
+        sim_entry["observations"], sim_entry["metadata"]["camera_motion_profile"] = (
+            self._apply_camera_motion_noise(
+                sim_entry["observations"],
+                camera_motion_profile,
+            )
+        )
         sim_entry["observations"], sim_entry["metadata"]["tracking_drift_profile"] = (
             self._apply_tracking_drift_noise(
                 sim_entry["observations"],
@@ -410,6 +422,97 @@ class BatchRunner:
             self._ratio_frame(ratio, frame_count)
             for ratio in np.linspace(low_ratio, high_ratio, count)
         ]
+
+    def _sample_camera_motion_profile(
+        self,
+        rng: np.random.Generator,
+        frame_count: int,
+        apply_noise: bool,
+    ) -> dict:
+        """
+        CMC 이후에도 남을 수 있는 작은 전역 보정 잔차를 샘플링한다.
+        좌표계는 보정 전 원본이 아니라 post-CMC residual observation으로 명시한다.
+        """
+        disabled = {
+            "enabled": False,
+            "coordinate_space": "post_cmc_residual_observation",
+            "pan_dx": 0.0,
+            "tilt_dy": 0.0,
+            "zoom_scale_end": 1.0,
+            "shake_amplitude": 0.0,
+            "shake_frequency": 0.0,
+            "phase": 0.0,
+            "affected_frame_count": 0,
+            "clipped_frame_count": 0,
+        }
+        if not apply_noise or frame_count < 4:
+            return disabled
+
+        if rng.random() < 0.20:
+            return disabled
+
+        return {
+            "enabled": True,
+            "coordinate_space": "post_cmc_residual_observation",
+            "pan_dx": round(float(rng.uniform(-0.025, 0.025)), 4),
+            "tilt_dy": round(float(rng.uniform(-0.018, 0.018)), 4),
+            "zoom_scale_end": round(float(rng.uniform(0.97, 1.03)), 4),
+            "shake_amplitude": round(float(rng.uniform(0.001, 0.004)), 4),
+            "shake_frequency": round(float(rng.uniform(1.0, 3.5)), 3),
+            "phase": round(float(rng.uniform(0.0, 2.0 * np.pi)), 4),
+            "affected_frame_count": 0,
+            "clipped_frame_count": 0,
+        }
+
+    def _apply_camera_motion_noise(
+        self,
+        observations: list[dict],
+        profile: dict,
+    ) -> tuple[list[dict], dict]:
+        """
+        전역 camera residual을 관측 좌표에 적용한다. zoom은 중심 기준 좌표와 bbox 크기에 같이 반영한다.
+        """
+        if not profile["enabled"]:
+            return observations, profile
+
+        moved = []
+        clipped_frame_count = 0
+        total_frames = max(len(observations) - 1, 1)
+
+        for idx, obs in enumerate(observations):
+            progress = idx / total_frames
+            shake = profile["shake_amplitude"] * np.sin(
+                (2.0 * np.pi * profile["shake_frequency"] * progress)
+                + profile["phase"]
+            )
+            zoom_scale = 1.0 + ((profile["zoom_scale_end"] - 1.0) * progress)
+
+            raw_cx = ((obs["cx"] - 0.5) * zoom_scale) + 0.5
+            raw_cy = ((obs["cy"] - 0.5) * zoom_scale) + 0.5
+            raw_cx += (profile["pan_dx"] * progress) + shake
+            raw_cy += (profile["tilt_dy"] * progress) + (shake * 0.6)
+            raw_w = obs["w"] * zoom_scale
+            raw_h = obs["h"] * zoom_scale
+
+            cx = float(np.clip(raw_cx, 0.0, 1.0))
+            cy = float(np.clip(raw_cy, 0.0, 1.0))
+            w = float(np.clip(raw_w, 0.005, 0.2))
+            h = float(np.clip(raw_h, 0.005, 0.2))
+
+            updated_obs = obs.copy()
+            updated_obs["cx"] = round(cx, 4)
+            updated_obs["cy"] = round(cy, 4)
+            updated_obs["w"] = round(w, 4)
+            updated_obs["h"] = round(h, 4)
+            moved.append(updated_obs)
+
+            if raw_cx != cx or raw_cy != cy or raw_w != w or raw_h != h:
+                clipped_frame_count += 1
+
+        updated_profile = profile.copy()
+        updated_profile["affected_frame_count"] = len(observations)
+        updated_profile["clipped_frame_count"] = clipped_frame_count
+        return moved, updated_profile
 
     def _sample_tracking_drift_profile(
         self,
