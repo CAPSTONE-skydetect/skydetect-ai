@@ -23,7 +23,7 @@ class BatchRunner:
         self.output_dir = output_dir
         self.fps = fps
         self.dt = 1.0 / fps
-        self.max_frames = 300 #고정변수 : 300 프레임 (약 10초 비행)
+        self.max_frames = 420 #최대 생성 프레임 (30FPS 기준 약 14초 비행)
         
         # 저장 디렉토리 자동 생성
         os.makedirs(self.output_dir, exist_ok=True)
@@ -42,8 +42,7 @@ class BatchRunner:
 
         rng = np.random.default_rng(unique_seed)
 
-        # [Sim2Real 추가] apply_noise=True 일 때 3초~10초(90~300 프레임) 가변 윈도우 동적 샘플링
-        current_max_frames = rng.integers(90, 301) if apply_noise else self.max_frames
+        frame_length_bucket, current_max_frames = self._sample_frame_length(rng)
 
         # 2️. 시나리오별 맞춤형 환경 변수(가변 변수) 세분화 설정
         start_pos = self._sample_start_position(rng)
@@ -98,6 +97,8 @@ class BatchRunner:
                 "start_speed": round(float(start_speed), 2),
                 "initial_goal_pos": [round(float(value), 2) for value in goal_pos],
                 "event_schedule": event_schedule,
+                "frame_length_bucket": frame_length_bucket,
+                "target_frame_count": int(current_max_frames),
                 "wind_speed": round(wind_speed, 2),
                 "fps": self.fps
             },
@@ -165,14 +166,33 @@ class BatchRunner:
 
         return sim_entry
 
+    def _sample_frame_length(self, rng: np.random.Generator) -> tuple[str, int]:
+        """
+        실제 A track 길이 편차를 반영하기 위해 short/medium/long 길이를 섞어 생성한다.
+        짧은 track은 C rule filter 경계와 운영 검증에 필요하므로 별도 bucket으로 남긴다.
+        """
+        bucket = str(
+            rng.choice(
+                ["short", "medium", "long"],
+                p=[0.25, 0.45, 0.30],
+            )
+        )
+        ranges = {
+            "short": (60, 120),
+            "medium": (121, 240),
+            "long": (241, self.max_frames),
+        }
+        low, high = ranges[bucket]
+        return bucket, int(rng.integers(low, high + 1))
+
     def _sample_start_position(self, rng: np.random.Generator) -> list[float]:
         """
         실제 촬영 상황의 다양성을 반영하기 위해 초기 위치 범위를 넓게 샘플링한다.
-        현재 관측 모델은 goal 기반 화면 스케일을 쓰므로, 시작 z를 과도하게 높이면
-        cy가 0에 붙는 샘플이 많아진다. 목표 위치 다양화 전까지는 보수적으로 넓힌다.
+        A가 넘기는 history는 관측된 객체에서 시작하므로, 초기 x는 화면 안쪽으로 제한한다.
+        현재 관측 모델은 goal 기반 화면 스케일을 쓰므로, 시작 z도 보수적으로 넓힌다.
         """
         return [
-            float(rng.uniform(-25.0, 70.0)),
+            float(rng.uniform(0.0, 70.0)),
             float(rng.uniform(55.0, 180.0)),
             float(rng.uniform(50.0, 105.0)),
         ]
@@ -289,8 +309,8 @@ class BatchRunner:
         birds = ["pigeon", "seagull", "falcon"]
         results = []
 
-        # [Sim2Real 추가] 가변 길이에 따른 최소 보장 프레임 허들 동적 세팅 (트랩 해제)
-        min_frame_cutoff = 70 if apply_noise else 150
+        # [Sim2Real 추가] 짧은 track도 학습/운영 필터 검증에 쓰기 위해 최소 허들을 낮춘다.
+        min_frame_cutoff = 60
 
         print("=" * 65)
         print(f" [Phase 1: Batch Runner] v2 고도화 공정 가동 (Noise 주입: {apply_noise})")
