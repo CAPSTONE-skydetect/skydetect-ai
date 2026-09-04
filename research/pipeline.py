@@ -36,7 +36,16 @@ class BatchRunner:
         # 1. 고유 결정론적 Seed 생성을 통한 세션 간 완벽한 실험 재현성 확보
         scenario_map = {"steady_cruise": 1, "sudden_dash": 2, "sharp_turns": 3, "multi_mode": 4}
         agent_map = {"bird": 10, "drone": 20}
-        sub_map = {"pigeon": 1, "seagull": 2, "falcon": 3, "quadcopter": 4}
+        sub_map = {
+            "pigeon": 1,
+            "seagull": 2,
+            "falcon": 3,
+            "consumer_quad": 4,
+            "racing_quad": 5,
+            "hover_quad": 6,
+            "fixed_wing_drone": 7,
+            "quadcopter": 4,
+        }
 
         unique_seed = (sample_idx * 10000) + (agent_map[agent_type] * 100) + (scenario_map[scenario] * 10) + sub_map[sub_type]
 
@@ -111,6 +120,8 @@ class BatchRunner:
             "metadata": {
                 "sample_id": sample_id,
                 "label": "bird" if agent_type == "bird" else "drone",
+                "agent_type": agent_type,
+                "sub_type": sub_type,
                 "scenario": scenario,
                 "start_pos": [round(float(value), 2) for value in start_pos],
                 "start_speed": round(float(start_speed), 2),
@@ -762,12 +773,26 @@ class BatchRunner:
         )
         return retained, updated_profile
 
+    def _split_count_evenly(self, total_count: int, group_count: int) -> list[int]:
+        base_count = total_count // group_count
+        remainder = total_count % group_count
+        return [
+            base_count + (1 if idx < remainder else 0)
+            for idx in range(group_count)
+        ]
+
     def execute_batch_pipeline(self, bird_samples_per_species: int = 50, drone_samples_per_model: int = 150, apply_noise: bool = False) -> str:
         """
         4대 세분화 시나리오 전체를 순회하며 새 600개, 드론 600개(총 1,200개)의 유효 데이터셋을 대량 생산합니다.
         """
         scenarios = ["steady_cruise", "sudden_dash", "sharp_turns", "multi_mode"]
         birds = ["pigeon", "seagull", "falcon"]
+        drone_models = [
+            "consumer_quad",
+            "racing_quad",
+            "hover_quad",
+            "fixed_wing_drone",
+        ]
         results = []
 
         # [Sim2Real 추가] 짧은 track도 학습/운영 필터 검증에 쓰기 위해 최소 허들을 낮춘다.
@@ -792,15 +817,20 @@ class BatchRunner:
                         valid_count += 1
                     idx += 1
 
-            # 내부 루프 2: 드론 군집 데이터 획득 (시나리오당 150개 샘플로 클래스 균형 추정 증폭)
-            valid_count = 0
-            idx = 1
-            while valid_count < drone_samples_per_model:
-                sim_data = self._run_single_simulation(scenario, "drone", "quadcopter", idx, apply_noise=apply_noise)
-                if len(sim_data["observations"]) >= min_frame_cutoff:
-                    results.append(sim_data)
-                    valid_count += 1
-                idx += 1
+            # 내부 루프 2: 시나리오당 드론 총량을 유지하며 subtype별로 고르게 분배
+            drone_model_quotas = self._split_count_evenly(
+                drone_samples_per_model,
+                len(drone_models),
+            )
+            for model, target_count in zip(drone_models, drone_model_quotas):
+                valid_count = 0
+                idx = 1
+                while valid_count < target_count:
+                    sim_data = self._run_single_simulation(scenario, "drone", model, idx, apply_noise=apply_noise)
+                    if len(sim_data["observations"]) >= min_frame_cutoff:
+                        results.append(sim_data)
+                        valid_count += 1
+                    idx += 1
         
         # 6️. 데이터 대량 생산 완료 후 pkl 직렬화 물리 저장
         # [수정] 구버전(v1) 자산을 훼손하지 않기 위해 파일명 버전 분리 정책 수립

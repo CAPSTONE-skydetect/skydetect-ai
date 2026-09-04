@@ -26,16 +26,58 @@ SPECIES_CONFIG = {
 
 # 드론의 기계적 특성을 반영한 설정 사전
 DRONE_CONFIG = {
-        "quadcopter": {
-            "s_star": 15.0,      # 선호 속도 (촬영용 드론 평균)
-            "a_max": 8.0,        # 최대 가속도 (m/s^2)
-            "k_a": 2.0,          # 가속도 반응 계수
-            "sigma_s": 0.05,     # 속도 노이즈 (조류의 1/10 수준으로 매우 낮음)
-            "sigma_u": 0.02,     # 방향 노이즈 (매우 낮음)
-            "k_h": 0.5,           # 고도 제어 강도
-            "real_w": 0.5, "real_h": 0.15
-        }
-    }
+    "consumer_quad": {
+        "s_star": 14.0,      # 촬영용/소비자용 드론 평균 속도
+        "a_max": 7.0,        # 완만한 가속
+        "k_a": 1.8,          # 부드러운 제어 반응
+        "sigma_s": 0.06,     # 안정적이나 완전히 이상적이지는 않은 속도 노이즈
+        "sigma_u": 0.025,    # 약한 방향 노이즈
+        "k_h": 0.55,         # 고도 유지 성향
+        "real_w": 0.5,
+        "real_h": 0.15,
+    },
+    "racing_quad": {
+        "s_star": 24.0,      # 레이싱 드론의 빠른 순항/돌파 속도
+        "a_max": 16.0,       # 강한 순간 가속
+        "k_a": 3.8,          # 민감한 제어 반응
+        "sigma_s": 0.12,     # 빠른 기동 중 속도 변동
+        "sigma_u": 0.045,    # 급격한 방향 변화
+        "k_h": 0.45,
+        "real_w": 0.32,
+        "real_h": 0.10,
+    },
+    "hover_quad": {
+        "s_star": 8.0,       # 느리고 정지/관측 구간이 많은 드론
+        "a_max": 5.0,
+        "k_a": 1.4,
+        "sigma_s": 0.04,
+        "sigma_u": 0.018,
+        "k_h": 0.8,          # 고도 유지가 강함
+        "real_w": 0.6,
+        "real_h": 0.18,
+    },
+    "fixed_wing_drone": {
+        "s_star": 20.0,      # 고정익 드론은 빠르고 활공 성향
+        "a_max": 6.0,        # 회전/가속은 쿼드보다 둔함
+        "k_a": 1.1,
+        "sigma_s": 0.08,
+        "sigma_u": 0.012,    # heading은 비교적 매끈함
+        "k_h": 0.22,         # 고도 변화가 완만함
+        "real_w": 1.2,
+        "real_h": 0.18,
+    },
+    # 이전 연구 노트북/스크립트 호환용 alias
+    "quadcopter": {
+        "s_star": 14.0,
+        "a_max": 7.0,
+        "k_a": 1.8,
+        "sigma_s": 0.06,
+        "sigma_u": 0.025,
+        "k_h": 0.55,
+        "real_w": 0.5,
+        "real_h": 0.15,
+    },
+}
 
 class Environment:
     def __init__(self, fps=30, wind_speed=1.0, gust_intensity=0.5, goal_pos=None):
@@ -300,7 +342,7 @@ class DroneDyn(BaseAgent):
 
         self.a_max = config["a_max"]        # 모터 출력 한계
         self.k_a = config["k_a"]            # 제어기 민감도
-        self.sigma_s = config["sigma_s"] if not apply_noise else 0.3    # 대기 속도 노이즈
+        self.sigma_s = config["sigma_s"] if not apply_noise else min(config["sigma_s"] * 3.0, 0.35)    # 대기 속도 노이즈
         self.sigma_u = config["sigma_u"]    # 헤딩 노이즈
         self.k_h = config["k_h"]            # 고도 유지 강도
 
