@@ -60,6 +60,13 @@ class BatchRunner:
         )
         start_pos = self._sample_start_position(rng, bbox_depth_profile)
         base_goal = self._sample_goal_position(rng, start_pos, bbox_depth_profile)
+        bird_behavior_profile = self._sample_bird_behavior_profile(
+            rng,
+            current_max_frames,
+            agent_type,
+            start_pos,
+            base_goal,
+        )
         start_speed = rng.uniform(10.0, 14.0)
         event_schedule = self._sample_event_schedule(
             scenario,
@@ -111,6 +118,7 @@ class BatchRunner:
         
         if agent_type == "bird":
             agent = BirdDyn(env, species=sub_type, start_pos=start_pos, start_speed=start_speed, apply_noise=apply_noise)
+            self._configure_bird_behavior(agent, bird_behavior_profile)
         else:
             agent = DroneDyn(env, model=sub_type, start_pos=start_pos, start_speed=start_speed, apply_noise=apply_noise)
         
@@ -122,6 +130,8 @@ class BatchRunner:
                 "label": "bird" if agent_type == "bird" else "drone",
                 "agent_type": agent_type,
                 "sub_type": sub_type,
+                "behavior_mode": bird_behavior_profile["mode"],
+                "bird_behavior_profile": bird_behavior_profile,
                 "scenario": scenario,
                 "start_pos": [round(float(value), 2) for value in start_pos],
                 "start_speed": round(float(start_speed), 2),
@@ -187,6 +197,14 @@ class BatchRunner:
                     env.x_goal = agent.pos.copy()
                 elif frame == event_schedule["hover_end"] + 1:
                     env.x_goal = np.array([base_goal[0] + 150.0, base_goal[1], base_goal[2]])
+
+            if agent_type == "bird":
+                self._apply_bird_behavior_waypoint(
+                    agent,
+                    env,
+                    frame,
+                    bird_behavior_profile,
+                )
 
             # 물리 모델 1스텝 구동 (3D 좌표 변위 계산)
             agent.step(apply_noise=apply_noise)
@@ -364,6 +382,158 @@ class BatchRunner:
             env.x_goal[1] = bbox_depth_profile["near_y"]
         else:
             env.x_goal[1] = bbox_depth_profile["far_y"]
+
+    def _sample_bird_behavior_profile(
+        self,
+        rng: np.random.Generator,
+        frame_count: int,
+        agent_type: str,
+        start_pos: list[float],
+        base_goal: list[float],
+    ) -> dict:
+        if agent_type != "bird":
+            return {
+                "mode": None,
+                "enabled": False,
+            }
+
+        mode = str(
+            rng.choice(
+                [
+                    "glide",
+                    "flap_jitter",
+                    "thermal_circle",
+                    "foraging_zigzag",
+                    "sudden_escape",
+                ],
+                p=[0.24, 0.20, 0.20, 0.22, 0.14],
+            )
+        )
+        profile = {
+            "mode": mode,
+            "enabled": True,
+            "duration_frames": int(frame_count),
+            "base_goal": [round(float(value), 2) for value in base_goal],
+        }
+
+        if mode == "glide":
+            profile.update(
+                {
+                    "altitude_offset": round(float(rng.uniform(-8.0, 10.0)), 2),
+                    "speed_scale": round(float(rng.uniform(0.88, 1.02)), 3),
+                }
+            )
+        elif mode == "flap_jitter":
+            profile.update(
+                {
+                    "altitude_amplitude": round(float(rng.uniform(6.0, 18.0)), 2),
+                    "period_frames": int(rng.integers(18, 46)),
+                    "jitter_scale": round(float(rng.uniform(1.35, 1.85)), 3),
+                }
+            )
+        elif mode == "thermal_circle":
+            center = np.array(base_goal, dtype=float)
+            center[0] = max(center[0] * rng.uniform(0.45, 0.75), start_pos[0] + 80.0)
+            center[1] = start_pos[1] + rng.uniform(-35.0, 35.0)
+            center[2] = np.clip(start_pos[2] + rng.uniform(10.0, 55.0), 40.0, 180.0)
+            profile.update(
+                {
+                    "center": [round(float(value), 2) for value in center],
+                    "radius": round(float(rng.uniform(35.0, 85.0)), 2),
+                    "turns": round(float(rng.uniform(0.7, 1.8)), 3),
+                    "climb": round(float(rng.uniform(8.0, 28.0)), 2),
+                }
+            )
+        elif mode == "foraging_zigzag":
+            profile.update(
+                {
+                    "segment_frames": int(rng.integers(16, 42)),
+                    "lateral_amplitude": round(float(rng.uniform(35.0, 95.0)), 2),
+                    "vertical_amplitude": round(float(rng.uniform(5.0, 22.0)), 2),
+                }
+            )
+        elif mode == "sudden_escape":
+            escape_frame = self._ratio_frame(rng.uniform(0.35, 0.75), frame_count)
+            lateral_direction = float(rng.choice([-1.0, 1.0]))
+            profile.update(
+                {
+                    "escape_frame": escape_frame,
+                    "escape_dx": round(float(rng.uniform(90.0, 180.0)), 2),
+                    "escape_dy": round(float(lateral_direction * rng.uniform(80.0, 180.0)), 2),
+                    "escape_dz": round(float(rng.uniform(20.0, 70.0)), 2),
+                    "speed_scale": round(float(rng.uniform(1.12, 1.32)), 3),
+                }
+            )
+
+        return profile
+
+    def _configure_bird_behavior(
+        self,
+        agent: BirdDyn,
+        behavior_profile: dict,
+    ) -> None:
+        mode = behavior_profile["mode"]
+        if mode == "glide":
+            agent.s_star *= behavior_profile["speed_scale"]
+            agent.k_g *= 0.72
+            agent.sigma_phi *= 0.55
+        elif mode == "flap_jitter":
+            agent.sigma_s *= behavior_profile["jitter_scale"]
+            agent.sigma_phi *= behavior_profile["jitter_scale"]
+        elif mode == "thermal_circle":
+            agent.k_g *= 1.20
+            agent.phi_max *= 0.92
+        elif mode == "foraging_zigzag":
+            agent.k_g *= 1.35
+            agent.sigma_phi *= 1.15
+        elif mode == "sudden_escape":
+            agent.s_star *= behavior_profile["speed_scale"]
+            agent.k_g *= 1.45
+
+    def _apply_bird_behavior_waypoint(
+        self,
+        agent: BirdDyn,
+        env: Environment,
+        frame: int,
+        behavior_profile: dict,
+    ) -> None:
+        mode = behavior_profile["mode"]
+        if mode == "glide":
+            env.h_star = env.x_goal[2] + behavior_profile["altitude_offset"]
+        elif mode == "flap_jitter":
+            phase = (2.0 * np.pi * frame) / max(behavior_profile["period_frames"], 1)
+            env.h_star = env.x_goal[2] + (np.sin(phase) * behavior_profile["altitude_amplitude"])
+        elif mode == "thermal_circle":
+            center = np.array(behavior_profile["center"], dtype=float)
+            progress = frame / max(behavior_profile["duration_frames"] - 1, 1)
+            angle = 2.0 * np.pi * behavior_profile["turns"] * (frame / max(env.fps * 8, 1))
+            env.x_goal = np.array(
+                [
+                    center[0] + (np.cos(angle) * behavior_profile["radius"]),
+                    center[1] + (np.sin(angle) * behavior_profile["radius"]),
+                    center[2] + min(progress, 1.0) * behavior_profile["climb"],
+                ]
+            )
+            env.h_star = env.x_goal[2]
+        elif mode == "foraging_zigzag":
+            segment = frame // max(behavior_profile["segment_frames"], 1)
+            direction = -1.0 if segment % 2 else 1.0
+            base_goal = np.array(behavior_profile["base_goal"], dtype=float)
+            env.x_goal[1] = base_goal[1] + (
+                direction * behavior_profile["lateral_amplitude"]
+            )
+            env.h_star = env.x_goal[2] + (
+                direction * behavior_profile["vertical_amplitude"]
+            )
+        elif mode == "sudden_escape" and frame >= behavior_profile["escape_frame"]:
+            env.x_goal = agent.pos + np.array(
+                [
+                    behavior_profile["escape_dx"],
+                    behavior_profile["escape_dy"],
+                    behavior_profile["escape_dz"],
+                ]
+            )
+            env.h_star = env.x_goal[2]
 
     def _sample_event_schedule(
         self,
