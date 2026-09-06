@@ -16,3 +16,6 @@ research/data/
 research/plots/
 research/output/
 .ipynb_checkpoints/
+
+# Model evaluation reports (generated)
+reports/
