@@ -10,6 +10,9 @@ python -m ai_server.services.train
 
 # 평가 (train 학습 → test 홀드아웃 평가, reports/ 에 결과 저장)
 python -m ai_server.services.evaluate
+
+# 확정본을 docs/ 로 승격 (발표·공유용으로 결과가 확정됐을 때만)
+python -m ai_server.services.evaluate --publish
 ```
 
 주요 옵션:
@@ -20,9 +23,30 @@ python -m ai_server.services.evaluate
 | `--test-path` | `data/test_features.csv` | 테스트 CSV 경로 |
 | `--report-dir` | `reports/` | 리포트 저장 위치 |
 | `--n-estimators` | `100` | 트리 개수 |
+| `--publish` | off | 확정본을 `docs/` 로 승격 |
 
-산출물은 `reports/metrics.json`(전체 지표)과 `reports/report.png`
-(confusion matrix / ROC / feature importance)이다. `reports/`는 생성물이므로 git 추적에서 제외한다.
+### 산출물 관리 방식
+
+`reports/`는 실행할 때마다 덮어쓰는 **작업 산출물**이라 git 추적에서 제외한다.
+파라미터를 바꿔가며 여러 번 돌려도 저장소 히스토리가 더러워지지 않는다.
+
+결과가 확정되면 `--publish`로 `docs/`에 승격한다. 이때만 저장소에 기록된다.
+
+| 대상 | 경로 | git |
+|---|---|---|
+| 매 실행 산출물 | `reports/report.png`, `reports/metrics.json` | 추적 안 함 |
+| 확정 그래프 | `docs/images/rf_evaluation.png` | 추적 |
+| 확정 지표 | `docs/rf_metrics.json` | 추적 |
+
+`rf_metrics.json`은 텍스트라 재학습 시 커밋 diff로 성능 변화가 그대로 드러난다.
+성능 회귀를 별도 도구 없이 히스토리에서 추적할 수 있다.
+
+## 평가 결과 요약
+
+![RF 분류기 평가 결과](images/rf_evaluation.png)
+
+윗줄은 전반 성능(혼동행렬 / ROC / 피처 중요도), 아랫줄은 세그먼트별 정확도 분해다.
+아랫줄에서 점선은 전체 정확도(0.8070)이고, **붉은 막대는 전체 평균을 밑도는 취약 구간**이다.
 
 ## 데이터셋
 

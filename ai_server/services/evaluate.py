@@ -8,6 +8,7 @@
 """
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +91,32 @@ def _segment_accuracy(
     return segments
 
 
+def _plot_segment(ax, title: str, breakdown: dict[str, Any], baseline: float) -> None:
+    """세그먼트별 정확도를 가로 막대로 그린다.
+
+    전체 정확도를 점선으로 함께 표시해 어느 구간이 평균을 끌어내리는지 보이게 한다.
+    """
+    items = sorted(breakdown.items(), key=lambda pair: pair[1]["accuracy"])
+    labels = [f"{name}\n(n={stats['n']})" for name, stats in items]
+    values = [stats["accuracy"] for _, stats in items]
+    # 전체 평균을 밑도는 구간을 붉게 칠해 취약 지점을 즉시 구분한다.
+    colors = ["#d9534f" if v < baseline else "#5b9bd5" for v in values]
+
+    bars = ax.barh(labels, values, color=colors)
+    ax.axvline(baseline, color="black", ls="--", lw=1)
+    ax.set_xlim(0, 1.0)
+    ax.set_title(title, fontsize=11)
+    ax.tick_params(labelsize=8)
+    for bar, value in zip(bars, values):
+        ax.text(
+            value + 0.015,
+            bar.get_y() + bar.get_height() / 2,
+            f"{value:.3f}",
+            va="center",
+            fontsize=8,
+        )
+
+
 def _plot(
     report_dir: Path,
     cm: np.ndarray,
@@ -99,19 +126,24 @@ def _plot(
     proba: np.ndarray,
     roc_auc: float,
     importance: list[tuple[str, float]],
+    segments: dict[str, Any],
 ) -> None:
-    """confusion matrix / ROC / feature importance를 한 장에 그린다."""
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    """전체 평가 결과를 한 장의 이미지로 그린다.
 
-    axes[0].imshow(cm, cmap="Blues")
-    axes[0].set_xticks(range(len(classes)), classes)
-    axes[0].set_yticks(range(len(classes)), classes)
-    axes[0].set_xlabel("Predicted")
-    axes[0].set_ylabel("True")
-    axes[0].set_title(f"Confusion Matrix (acc={accuracy:.4f})")
+    윗줄은 전반 성능(혼동행렬 / ROC / 피처 중요도),
+    아랫줄은 세그먼트별 정확도 분해로 취약 구간을 드러낸다.
+    """
+    fig, axes = plt.subplots(2, 3, figsize=(18, 11))
+
+    axes[0][0].imshow(cm, cmap="Blues")
+    axes[0][0].set_xticks(range(len(classes)), classes)
+    axes[0][0].set_yticks(range(len(classes)), classes)
+    axes[0][0].set_xlabel("Predicted")
+    axes[0][0].set_ylabel("True")
+    axes[0][0].set_title(f"Confusion Matrix (acc={accuracy:.4f})")
     for i in range(cm.shape[0]):
         for j in range(cm.shape[1]):
-            axes[0].text(
+            axes[0][0].text(
                 j,
                 i,
                 cm[i, j],
@@ -122,18 +154,30 @@ def _plot(
             )
 
     fpr, tpr, _ = roc_curve(y_binary, proba)
-    axes[1].plot(fpr, tpr, label=f"AUC={roc_auc:.4f}")
-    axes[1].plot([0, 1], [0, 1], "k--", lw=0.8)
-    axes[1].set_xlabel("False Positive Rate")
-    axes[1].set_ylabel("True Positive Rate")
-    axes[1].set_title("ROC Curve")
-    axes[1].legend()
+    axes[0][1].plot(fpr, tpr, label=f"AUC={roc_auc:.4f}")
+    axes[0][1].plot([0, 1], [0, 1], "k--", lw=0.8)
+    axes[0][1].set_xlabel("False Positive Rate")
+    axes[0][1].set_ylabel("True Positive Rate")
+    axes[0][1].set_title("ROC Curve")
+    axes[0][1].legend()
 
     names = [name for name, _ in importance][::-1]
     values = [value for _, value in importance][::-1]
-    axes[2].barh(names, values)
-    axes[2].set_title("Feature Importance")
-    axes[2].tick_params(labelsize=8)
+    axes[0][2].barh(names, values)
+    axes[0][2].set_title("Feature Importance")
+    axes[0][2].tick_params(labelsize=8)
+
+    # 아랫줄: 세그먼트 분해. 컬럼이 3개 미만이면 남는 칸은 비워 둔다.
+    bottom_columns = [c for c in _SEGMENT_COLUMNS if c in segments][:3]
+    for index in range(3):
+        ax = axes[1][index]
+        if index >= len(bottom_columns):
+            ax.axis("off")
+            continue
+        column = bottom_columns[index]
+        _plot_segment(
+            ax, f"Accuracy by {column} (dashed = overall)", segments[column], accuracy
+        )
 
     plt.tight_layout()
     plt.savefig(report_dir / "report.png", dpi=130)
@@ -163,6 +207,7 @@ def evaluate(
     y_binary = (y_test == _POSITIVE_LABEL).astype(int)
 
     accuracy = accuracy_score(y_test, y_pred)
+    segments = _segment_accuracy(test_df, y_test, y_pred)
     cm = confusion_matrix(y_test, y_pred, labels=classes)
     per_class = classification_report(y_test, y_pred, output_dict=True, digits=4)
     roc_auc = roc_auc_score(y_binary, proba)
@@ -215,15 +260,33 @@ def evaluate(
             "folds": [round(float(score), 4) for score in cv_scores],
         },
         "feature_importance": {name: round(float(v), 4) for name, v in importance},
-        "segments": _segment_accuracy(test_df, y_test, y_pred),
+        "segments": segments,
     }
 
     (out_dir / "metrics.json").write_text(
         json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    _plot(out_dir, cm, classes, accuracy, y_binary, proba, roc_auc, importance)
+    _plot(
+        out_dir, cm, classes, accuracy, y_binary, proba, roc_auc, importance, segments
+    )
 
     return report
+
+
+def publish(report_dir: str = _DEFAULT_REPORT_DIR) -> None:
+    """확정된 리포트를 docs/ 로 승격해 저장소에 함께 기록한다.
+
+    reports/ 는 매 실행마다 덮어쓰는 작업 산출물이라 git 추적에서 제외한다.
+    발표·공유용으로 확정된 결과만 이 함수로 docs/ 에 올린다.
+    """
+    source = Path(report_dir)
+    docs_dir = _PROJECT_ROOT / "docs"
+    (docs_dir / "images").mkdir(parents=True, exist_ok=True)
+
+    shutil.copy2(source / "report.png", docs_dir / "images" / "rf_evaluation.png")
+    shutil.copy2(source / "metrics.json", docs_dir / "rf_metrics.json")
+    print(f"확정본 승격: {docs_dir / 'images' / 'rf_evaluation.png'}")
+    print(f"확정본 승격: {docs_dir / 'rf_metrics.json'}")
 
 
 def _print_summary(report: dict[str, Any]) -> None:
@@ -268,6 +331,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--n-estimators", type=int, default=N_ESTIMATORS, help="트리 개수"
     )
+    parser.add_argument(
+        "--publish",
+        action="store_true",
+        help="확정본을 docs/ 로 승격해 저장소에 기록한다",
+    )
     args = parser.parse_args()
 
     result = evaluate(
@@ -278,3 +346,6 @@ if __name__ == "__main__":
     )
     _print_summary(result)
     print(f"\n리포트 저장: {args.report_dir}")
+
+    if args.publish:
+        publish(args.report_dir)
