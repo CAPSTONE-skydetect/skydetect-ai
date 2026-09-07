@@ -1,5 +1,6 @@
 venv/
 __pycache__/
+.pytest_cache/
 .env
 .DS_Store
 *.pyc
@@ -16,3 +17,7 @@ research/data/
 research/plots/
 research/output/
 .ipynb_checkpoints/
+
+# Runtime tracking artifacts
+artifacts/manual_tracks/
+storage/uploads/

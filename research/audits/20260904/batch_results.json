@@ -1,0 +1,33 @@
+{
+  "False": {
+    "samples": 140,
+    "points": 29070,
+    "boundary_points": 1132,
+    "samples_with_boundary": 20,
+    "samples_projection_only_shift_gt_002": 95,
+    "v_mean_gt_5": 20,
+    "sigma_gt_30": 0,
+    "retained_below_60": 0,
+    "a_mean_median": 67.6451,
+    "max_projection_only_shift": 0.9366055499294893
+  },
+  "True": {
+    "samples": 140,
+    "points": 26353,
+    "boundary_points": 724,
+    "samples_with_boundary": 18,
+    "samples_projection_only_shift_gt_002": 95,
+    "v_mean_gt_5": 54,
+    "sigma_gt_30": 0,
+    "retained_below_60": 0,
+    "a_mean_median": 109.21985,
+    "max_projection_only_shift": 0.9245910277670607
+  },
+  "stationary_jitter_only": {
+    "v_mean": 3.0881,
+    "v_std": 1.7177,
+    "a_mean": 49.9327,
+    "heading_change_ratio": 0.5697,
+    "maneuverability_sigma": 1.0842
+  }
+}
