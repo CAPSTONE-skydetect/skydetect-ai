@@ -1,308 +1,310 @@
-import os
-import pickle
+"""Reproducible latent flight -> optical projection -> A-like observations -> v3 features."""
+import argparse
+from dataclasses import asdict
+import hashlib
+import platform
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from datetime import datetime
-from scipy.stats import circmean
 
-from generators import Environment, BirdDyn, DroneDyn
+from . import FEATURE_VERSION, SIMULATOR_VERSION
+from .camera import Camera
+from .behavior import BehaviorSchedule
+from .features import FEATURE_COLUMNS, FeatureConfig, extract_features
+from .generators import BirdDyn, DroneDyn, Environment, SPECIES_CONFIG
+from .io import read_jsonl, write_json, write_jsonl
+from .observation import NoiseConfig, ObservationModel
+from .parameters import SAMPLING, parameter_manifest
 
-# 전영 물리 한계 상수 선언
-V_MIN = 0.0
-V_MAX = 5.0
-H_MIN = 0.0
-H_MAX = 1.0
+SCENARIOS = ("baseline", "sudden_dash", "sharp_turns", "multi_mode")
+DRONE_SUBTYPES = ("consumer_quad", "racing_quad", "hover_quad", "fixed_wing_drone")
+BIRD_BEHAVIORS = ("glide", "flap_jitter", "thermal_circle", "foraging_zigzag", "sudden_escape")
+DEPTH_MODES = ("approaching", "receding", "crossing", "passing_by")
+DEFAULT_OUTPUT = Path(__file__).resolve().parent / "output" / "sim_v4"
+
+
+def stable_seed(*parts):
+    return int.from_bytes(hashlib.sha256("|".join(map(str, parts)).encode()).digest()[:8], "little")
+
+
+def assign_splits(families, seed, strata=None):
+    groups = sorted(set(families))
+    partitions = {}
+    for group in groups:
+        partitions.setdefault(strata[group] if strata is not None else "all", []).append(group)
+    result = {}
+    for stratum, members in sorted(partitions.items()):
+        if len(members) < 3:
+            result.update({group: "train" for group in members})
+            continue
+        order = np.random.default_rng(stable_seed(seed, "split", stratum)).permutation(members)
+        n_test = max(1, int(round(len(members)*.15)))
+        n_val = max(1, int(round(len(members)*.15)))
+        result.update({str(group): "test" if i < n_test else "validation" if i < n_test+n_val else "train"
+                       for i, group in enumerate(order)})
+    return result
+
 
 class BatchRunner:
-    def __init__(self, output_dir: str = "data", fps: int = 30):
-        """
-        Phase 1 : Batch Runner 클래스
-        :param output_dir : 생성된 기동 데이터 (.pkl)를 저장할 상대 경로
-        :param fps : 시뮬레이션의 초당 프레임 수 (기존 generators.py 기본값 30 적용)
-        """
-        self.output_dir = output_dir
-        self.fps = fps
-        self.dt = 1.0 / fps
-        self.max_frames = 300 #고정변수 : 300 프레임 (약 10초 비행)
-        
-        # 저장 디렉토리 자동 생성
-        os.makedirs(self.output_dir, exist_ok=True)
+    def __init__(self, output_dir=DEFAULT_OUTPUT, fps=30., seed=42, feature_config=None, noise_config=None):
+        if not np.isfinite(fps) or not 1 <= fps <= 240:
+            raise ValueError("fps must be in [1, 240]")
+        self.output_dir, self.fps, self.seed = Path(output_dir), float(fps), int(seed)
+        self.feature_config = feature_config or FeatureConfig()
+        self.noise_config = noise_config or NoiseConfig()
+        self.provenance = parameter_manifest()
 
-    def _run_single_simulation(self, scenario: str, agent_type: str, sub_type: str, sample_idx: int, apply_noise: bool = False) -> dict:
-        """
-        단일 비행 시퀀스를 물리 엔진 상에서 가동 & 2D 가상 카메라 관측 데이터를 추출
-        """
-        
-        # 1. 고유 결정론적 Seed 생성을 통한 세션 간 완벽한 실험 재현성 확보
-        scenario_map = {"steady_cruise": 1, "sudden_dash": 2, "sharp_turns": 3, "multi_mode": 4}
-        agent_map = {"bird": 10, "drone": 20}
-        sub_map = {"pigeon": 1, "seagull": 2, "falcon": 3, "quadcopter": 4}
-
-        unique_seed = (sample_idx * 10000) + (agent_map[agent_type] * 100) + (scenario_map[scenario] * 10) + sub_map[sub_type]
-
-        rng = np.random.default_rng(unique_seed)
-
-        # [Sim2Real 추가] apply_noise=True 일 때 3초~10초(90~300 프레임) 가변 윈도우 동적 샘플링
-        current_max_frames = rng.integers(90, 301) if apply_noise else self.max_frames
-
-        # 2️. 시나리오별 맞춤형 환경 변수(가변 변수) 세분화 설정
-        base_goal = [300.0, 50.0, 50.0]  # 기본 목적지 공간 좌표
-        start_pos = [0.0, rng.uniform(75.0, 85.0), rng.uniform(95.0, 105.0)]
-        start_speed = rng.uniform(10.0, 14.0)
-
-        if scenario == "steady_cruise":
-            # 시나리오 A: 낮은 풍속과 안정적인 직선 기조 유도
-            wind_speed = rng.uniform(1.0, 3.0)
-            gust_intensity = rng.uniform(0.1, 0.3)
-            goal_pos = [base_goal[0] + rng.uniform(-10, 10), base_goal[1], base_goal[2]]
-
-        elif scenario == "sudden_dash":
-            # 시나리오 B: 중간 풍속 및 전방 대시 기동 유도
-            wind_speed = rng.uniform(2.0, 5.0)
-            gust_intensity = rng.uniform(0.2, 0.4)
-            goal_pos = base_goal.copy()
-
-        elif scenario == "sharp_turns":
-            # 시나리오 C: 강력한 측풍 외란 및 지그재그 회전 유도
-            wind_speed = rng.uniform(5.0, 8.0)  # 논문 기준 강풍 조건
-            gust_intensity = rng.uniform(0.6, 0.9)
-            goal_pos = base_goal.copy()
-
-        elif scenario == "multi_mode":
-            # 시나리오 D: 복합 모드 비행 환경 세팅
-            wind_speed = rng.uniform(2.0, 6.0)
-            gust_intensity = rng.uniform(0.3, 0.6)
-            goal_pos = base_goal.copy()
-
-        # 3️. 환경 및 역학 에이전트 인스턴스화
-        env = Environment(fps=self.fps, wind_speed=wind_speed, gust_intensity=gust_intensity, goal_pos=goal_pos)
-        
-        if agent_type == "bird":
-            agent = BirdDyn(env, species=sub_type, start_pos=start_pos, start_speed=start_speed, apply_noise=apply_noise)
-        else:
-            agent = DroneDyn(env, model=sub_type, start_pos=start_pos, start_speed=start_speed, apply_noise=apply_noise)
-        
-        # 설계서 명세 규격에 맞춘 계층 구조 사전 정의
-        sample_id = f"{sub_type}_{scenario}_{sample_idx:03d}"
-        sim_entry = {
-            "metadata": {
-                "sample_id": sample_id,
-                "label": "bird" if agent_type == "bird" else "drone",
-                "scenario": scenario,
-                "wind_speed": round(wind_speed, 2),
-                "fps": self.fps
-            },
-            "observations": []
-        }
-
-        # 4️. 내부 루프 (Sample Loop): 300 프레임 시뮬레이션 타임라인 제어
-        for frame in range(current_max_frames):
-            
-            # [시나리오 동적 제어 레이어 구현]
+    def simulate(self, scenario, agent_type, subtype, sample_index, noisy=True,
+                 frame_count=None, behavior=None, depth_mode=None):
+        if scenario not in SCENARIOS or agent_type not in ("bird", "drone"):
+            raise ValueError("Unknown scenario or agent type")
+        allowed = SPECIES_CONFIG if agent_type == "bird" else DRONE_SUBTYPES
+        if subtype not in allowed:
+            raise ValueError("Unknown subtype")
+        family = f"{self.seed}:{scenario}:{int(sample_index)}"
+        scenario_seed = stable_seed(family, "scenario")
+        physical_seed = stable_seed(family, agent_type, subtype, "physics")
+        observer_seed = stable_seed(family, agent_type, subtype, "observer")
+        rng = np.random.default_rng(scenario_seed)
+        physical_rng = np.random.default_rng(physical_seed)
+        length_range = ((60, 120), (121, 240), (241, 420))[int(rng.integers(3))]
+        sampled_length = int(rng.integers(length_range[0], length_range[1] + 1))
+        n = sampled_length if frame_count is None else int(frame_count)
+        if n < 5 or n > 10000 or (frame_count is not None and n != frame_count):
+            raise ValueError("frame_count must be an integer in [5, 10000]")
+        start = rng.uniform([-50., 40., 50.], [80., 180., 160.])
+        chosen_depth = str(rng.choice(DEPTH_MODES))
+        depth_mode = depth_mode or chosen_depth
+        if depth_mode not in DEPTH_MODES:
+            raise ValueError("Unknown depth mode")
+        yaw = float(rng.uniform(-np.pi, np.pi))
+        if depth_mode == "approaching":
+            yaw = float(rng.uniform(-.8 * np.pi, -.2 * np.pi))
+        elif depth_mode == "receding":
+            yaw = float(rng.uniform(.2 * np.pi, .8 * np.pi))
+        elif depth_mode in ("crossing", "passing_by"):
+            yaw = float(rng.choice([0., np.pi]) + rng.normal(0., .12))
+        direction = np.array([np.cos(yaw), np.sin(yaw), rng.uniform(-.15, .15)])
+        direction /= np.linalg.norm(direction)
+        distance = float(rng.uniform(150., 400.))
+        goal = start + distance * direction
+        goal[2] = np.clip(goal[2], 30., 180.)
+        if np.linalg.norm(goal-start) < 150.:
+            goal[:2] = start[:2] + (goal[:2]-start[:2]) * 151. / np.linalg.norm(goal-start)
+        initial_goal = goal.copy()
+        camera = Camera(horizontal_fov_deg=float(rng.uniform(50., 75.)),
+                        position=(0., -70., 12.), look_at=(15., 110., 100.))
+        env = Environment(fps=self.fps, goal_pos=goal, wind_speed=float(rng.uniform(*SAMPLING["wind_speed_m_s"])),
+                          wind_direction=float(rng.uniform(-np.pi, np.pi)),
+                          gust_intensity=float(rng.uniform(*SAMPLING["gust_std_m_s"])),
+                          rng=np.random.default_rng(stable_seed(physical_seed, "wind")), camera=camera)
+        events = dict(dash=int(rng.uniform(.25, .55) * n), brake=int(rng.uniform(.65, .85) * n),
+                      hover_start=int(rng.uniform(.2, .45) * n), hover_end=int(rng.uniform(.6, .8) * n),
+                      turns=sorted(rng.choice(np.arange(max(2, int(.15*n)), max(8, int(.85*n))),
+                                             size=min(5, max(2, int(rng.integers(2, 6)))), replace=False).tolist()))
+        turn_signs = rng.choice([-1., 1.], len(events["turns"]))
+        events["turn_angles_rad"] = (turn_signs*np.radians(rng.uniform(*SAMPLING["turn_angle_deg"], len(turn_signs)))).tolist()
+        events["dash_scale"] = float(rng.uniform(*SAMPLING["dash_scale"]))
+        events["brake_scale"] = float(rng.uniform(*SAMPLING["brake_scale"]))
+        sampled_behavior = str(rng.choice(BIRD_BEHAVIORS))
+        behavior = behavior or (sampled_behavior if agent_type == "bird" else "cruise")
+        if agent_type == "bird" and behavior not in BIRD_BEHAVIORS:
+            raise ValueError("Unknown bird behavior")
+        if agent_type == "drone" and behavior != "cruise":
+            raise ValueError("Drone behavior is commanded by scenario")
+        cls = BirdDyn if agent_type == "bird" else DroneDyn
+        kwargs = {"species": subtype} if agent_type == "bird" else {"model": subtype}
+        agent = cls(env, **kwargs, start_pos=start, heading=goal-start,
+                    start_speed=10., rng=np.random.default_rng(stable_seed(physical_seed, "agent")))
+        individual_scaling = agent.randomize_individual(physical_rng)
+        schedule = BehaviorSchedule(np.random.default_rng(stable_seed(physical_seed,"behavior")), n/self.fps)
+        agent.behavior = behavior
+        banked = agent_type == "bird" or agent.fixed_wing
+        radius = max(25., agent.s_star ** 2 / (9.81 * np.tan(np.radians(25)))) if banked else 30.
+        lateral = np.array([-direction[1], direction[0], 0.])
+        center = start + radius * lateral
+        hold_goal = None
+        latent, optical = [], []
+        failure = None
+        for frame in range(n):
+            agent.speed_scale = 1.
+            env.updraft = 0.
+            mode = behavior
+            if depth_mode == "passing_by":
+                progress = frame / max(n-1, 1)
+                env.x_goal = agent.pos + 160*direction + [0., -100*np.cos(np.pi*progress), 0.]
+            if behavior == "thermal_circle":
+                relative = agent.pos - center
+                angle = np.arctan2(relative[1], relative[0]) + .5
+                env.x_goal = center + [radius*np.cos(angle), radius*np.sin(angle), 0.]
+                env.x_goal[2] = agent.pos[2]
+                env.updraft = schedule.thermal_updraft(np.linalg.norm(relative[:2]), radius)
+            elif behavior == "foraging_zigzag":
+                env.x_goal = schedule.foraging_goal(frame/self.fps, agent.pos, direction)
+            elif behavior == "sudden_escape" and frame >= events["dash"]:
+                agent.speed_scale = events["dash_scale"]
             if scenario == "sudden_dash":
-                if frame == 100:
-                    # 목적지를 순식간에 전방으로 멀리 이동시켜 급가속(Dash) 유도
-                    env.x_goal[0] += 250.0
-                elif frame == 200:
-                    # 목적지를 기체 바로 뒤쪽으로 배치하여 급브레이크(Braking) 기동 강제
-                    env.x_goal = agent.pos - (agent.u * 60.0)
-
-            elif scenario == "sharp_turns":
-                # 지그재그 및 연속적인 예각 선회 유도 (슬라롬 기동)
-                if frame == 60:
-                    env.x_goal = np.array([agent.pos[0] + 50.0, 180.0, 90.0])
-                elif frame == 140:
-                    env.x_goal = np.array([agent.pos[0] + 50.0, -80.0, 40.0])
-                elif frame == 220:
-                    env.x_goal = np.array([agent.pos[0] + 80.0, 50.0, 60.0])
-
-            elif scenario == "multi_mode":
-                # 임무 기반 다중 모드: 100~180 프레임 구간 동안 목적지를 현재 위치로 고정하여
-                # 드론에게는 호버링(Hovering)을, 새에게는 제자리 선회(Circling) 루프 유도
-                if 100 <= frame <= 180:
-                    env.x_goal = agent.pos.copy()
-                elif frame == 181:
-                    env.x_goal = np.array([base_goal[0] + 150.0, base_goal[1], base_goal[2]])
-
-            # 물리 모델 1스텝 구동 (3D 좌표 변위 계산)
-            agent.step(apply_noise=apply_noise)
-
-            # 5️. Early Stopping 예외 제어 (지면 추락 검사)
-            if agent.pos[2] <= 0:
+                agent.speed_scale = events["dash_scale"] if events["dash"] <= frame < events["brake"] else (events["brake_scale"] if frame >= events["brake"] else 1.)
+            if scenario == "sharp_turns" and frame in events["turns"]:
+                index = events["turns"].index(frame)
+                current_yaw = np.arctan2(agent.u[1], agent.u[0]) + events["turn_angles_rad"][index]
+                goal = agent.pos + [200*np.cos(current_yaw), 200*np.sin(current_yaw), 0.]
+            # Scenario guidance explicitly overrides behavior guidance when active.
+            if scenario == "sharp_turns":
+                env.x_goal = goal.copy()
+                mode = "scenario_turn"
+            if scenario == "multi_mode" and events["hover_start"] <= frame < events["hover_end"]:
+                if hold_goal is None:
+                    hold_goal = agent.pos.copy()
+                if banked:
+                    angle = np.arctan2(agent.pos[1]-center[1], agent.pos[0]-center[0]) + .5
+                    env.x_goal = center + [radius*np.cos(angle), radius*np.sin(angle), 0.]
+                    mode = "loiter"
+                else:
+                    env.x_goal = hold_goal.copy()
+                    mode = "position_hold"
+            elif scenario == "multi_mode" and frame >= events["hover_end"]:
+                env.x_goal = goal.copy()
+            if agent.pos[2] <= 2. or not np.all(np.isfinite(agent.pos)):
+                failure = "ground_or_nonfinite_state"
                 break
+            optical.append(agent.get_observation(frame))
+            latent.append(dict(frame_index=frame, time_seconds=frame/self.fps, position_m=agent.pos.tolist(),
+                               velocity_m_s=agent.v_ground.tolist(), acceleration_m_s2=agent.accel.tolist(),
+                               airspeed_m_s=float(agent.s), bank_rad=float(agent.phi),
+                               goal_m=env.x_goal.tolist(), wind_m_s=env.wind.tolist(),
+                               speed_scale=agent.speed_scale, control_mode=mode,
+                               dynamics=dict(agent.diagnostics)))
+            if frame < n - 1:
+                agent.step()
+        # Keep the planned timeline: early termination is a rejection, not a shorter success.
+        optical += [None] * (n-len(optical))
+        observations, observation_meta = ObservationModel(
+            camera, np.random.default_rng(observer_seed), noisy, self.noise_config).apply(optical, self.fps)
+        if failure:
+            for state in observation_meta["states"][len(latent):]:
+                state["reason"] = failure
+        feature_result = extract_features(observations, camera.width, camera.height, self.fps, self.feature_config)
+        if failure:
+            feature_result.update(feature_status="rejected", features=None)
+            feature_result["reasons"].append(failure)
+        sample_id = f"{family}:{agent_type}:{subtype}:{'noisy' if noisy else 'ideal'}"
+        metadata = dict(sample_id=sample_id, family_id=family, label=agent_type, subtype=subtype,
+                        scenario=scenario, behavior_mode=behavior, requested_depth_mode=depth_mode,
+                        observation_profile="noisy" if noisy else "ideal", fps=self.fps, frame_count=n,
+                        start_position_m=start.tolist(), initial_goal_m=initial_goal.tolist(),
+                        commanded_goal_m=goal.tolist(), minimum_goal_distance_m=150.,
+                        simulator_version=SIMULATOR_VERSION, feature_version=FEATURE_VERSION,
+                        seed=self.seed, scenario_seed=scenario_seed, physics_seed=physical_seed,
+                        observation_seed=observer_seed, camera=camera.to_dict(),
+                        coordinate_space="post_cmc_residual_observation",
+                        individual_parameters=dict(cruise_speed_m_s=agent.s_star, width_m=agent.real_width,
+                                                   height_m=agent.real_height, flap_hz=agent.flap_hz,
+                                                   physical_config=agent.config, scaling=individual_scaling),
+                        parameter_manifest_sha256=self.provenance["sha256"],
+                        behavior_schedule=schedule.metadata(), calibration_status="uncalibrated_no_real_A",
+                        integration_max_step_s=agent.integration_step_s,
+                        events=events, latent_failure=failure, observation=observation_meta)
+        return dict(metadata=metadata, track=dict(track_id=int(sample_index), source_video_id=family,
+                                                 history=observations, quality=observation_meta["quality"]),
+                    world_truth=latent, optical_truth=optical, feature_result=feature_result)
 
-            # 2D 관측 데이터 슬라이싱 투영 및 기록
-            obs = agent.get_observation(frame_index=frame, apply_noise=apply_noise)
-            sim_entry["observations"].append(obs)
+    def run(self, samples_per_subtype=5, paired=True, scenarios=SCENARIOS):
+        if samples_per_subtype < 1 or int(samples_per_subtype) != samples_per_subtype:
+            raise ValueError("samples_per_subtype must be a positive integer")
+        if not scenarios or any(s not in SCENARIOS for s in scenarios) or len(set(scenarios)) != len(scenarios):
+            raise ValueError("Scenarios must be unique known names")
+        families = [f"{self.seed}:{s}:{i}" for s in scenarios for i in range(samples_per_subtype)]
+        strata = {f"{self.seed}:{s}:{i}": s for s in scenarios for i in range(samples_per_subtype)}
+        splits = assign_splits(families, self.seed, strata)
+        rows = []
+        for name in ("manifest.json", "dataset_manifest.json"):
+            existing_manifest = self.output_dir / name
+            if existing_manifest.exists():
+                import json
+                if json.loads(existing_manifest.read_text(encoding="utf-8"))["simulator_version"] != SIMULATOR_VERSION:
+                    raise ValueError("Refusing to overwrite artifacts from a different simulator version")
+        path = self.output_dir / "raw_trajectories_v3.jsonl"
 
-        return sim_entry
+        def generate():
+            for scenario in scenarios:
+                for i in range(samples_per_subtype):
+                    for label, subtypes in (("bird", tuple(SPECIES_CONFIG)), ("drone", DRONE_SUBTYPES)):
+                        for subtype in subtypes:
+                            for noisy in ((False, True) if paired else (True,)):
+                                sample = self.simulate(scenario, label, subtype, i, noisy)
+                                meta, feature = sample["metadata"], sample["feature_result"]
+                                meta["split"] = splits[meta["family_id"]]
+                                row = {k: meta[k] for k in ("sample_id", "family_id", "label", "subtype", "scenario",
+                                                           "behavior_mode", "observation_profile", "split", "frame_count",
+                                                           "simulator_version", "feature_version", "requested_depth_mode", "fps", "seed")}
+                                row.update(attempted_missing_fraction=meta["observation"]["quality"]["missing_ratio"],
+                                           camera_residual_enabled=meta["observation"]["camera_motion"]["enabled"],
+                                           tracking_drift_enabled=meta["observation"]["tracking_drift"]["enabled"])
+                                row.update(feature_status=feature["feature_status"],
+                                           feature_config_id=feature["feature_config_id"],
+                                           rejection_reason=";".join(feature["reasons"]),
+                                           **{k: (feature["features"] or {}).get(k) for k in FEATURE_COLUMNS},
+                                           **feature["quality"])
+                                rows.append(row)
+                                yield sample
+        write_jsonl(path, generate())
+        table = pd.DataFrame(rows)
+        table.to_csv(self.output_dir / "simulation_features_v3.csv", index=False)
+        manifest = dict(simulator_version=SIMULATOR_VERSION, feature_version=FEATURE_VERSION,
+                        seed=self.seed, fps=self.fps, feature_config=asdict(self.feature_config),
+                        feature_config_id=self.feature_config.fingerprint, noise_config=asdict(self.noise_config),
+                        samples_per_subtype=samples_per_subtype, paired=paired, scenarios=list(scenarios),
+                        rows=len(table), accepted=int((table.feature_status == "accepted").sum()),
+                        family_splits=splits, calibration_status="uncalibrated_no_real_A",
+                        split_policy="scenario-stratified families; approximately 70/15/15, rounded per scenario; <3 families all train",
+                        validation_scope="physical_invariants_and_internal_consistency_only",
+                        parameter_manifest_sha256=self.provenance["sha256"],
+                        coordinate_space="post_cmc_residual_observation",
+                        feature_columns=FEATURE_COLUMNS,
+                        environment=dict(python=platform.python_version(), numpy=np.__version__, pandas=pd.__version__),
+                        source_sha256={p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                                       for p in sorted(Path(__file__).resolve().parent.glob("*.py"))},
+                        runtime_compatibility="NOT compatible with production v1/v2 model or RuleFilter thresholds")
+        write_json(self.output_dir / "manifest.json", manifest)
+        write_json(self.output_dir / "parameter_manifest.json", self.provenance)
+        return table
 
-    def execute_batch_pipeline(self, bird_samples_per_species: int = 50, drone_samples_per_model: int = 150, apply_noise: bool = False) -> str:
-        """
-        4대 세분화 시나리오 전체를 순회하며 새 600개, 드론 600개(총 1,200개)의 유효 데이터셋을 대량 생산합니다.
-        """
-        scenarios = ["steady_cruise", "sudden_dash", "sharp_turns", "multi_mode"]
-        birds = ["pigeon", "seagull", "falcon"]
-        results = []
-
-        # [Sim2Real 추가] 가변 길이에 따른 최소 보장 프레임 허들 동적 세팅 (트랩 해제)
-        min_frame_cutoff = 70 if apply_noise else 150
-
-        print("=" * 65)
-        print(f" [Phase 1: Batch Runner] v2 고도화 공정 가동 (Noise 주입: {apply_noise})")
-        print("=" * 65)
-
-        # 외부 루프 (Scenario Loop)
-        for scenario in scenarios:
-            
-            # 내부 루프 1: 조류 군집 데이터 획득 (시나리오당 종별 50개 샘플)
-            for species in birds:
-                valid_count = 0
-                idx = 1
-                while valid_count < bird_samples_per_species:
-                    sim_data = self._run_single_simulation(scenario, "bird", species, idx, apply_noise=apply_noise)
-                    # 데이터 유효 품질 방어벽 (최소 50프레임 이상 비행한 데이터만 인정)
-                    if len(sim_data["observations"]) >= min_frame_cutoff:
-                        results.append(sim_data)
-                        valid_count += 1
-                    idx += 1
-
-            # 내부 루프 2: 드론 군집 데이터 획득 (시나리오당 150개 샘플로 클래스 균형 추정 증폭)
-            valid_count = 0
-            idx = 1
-            while valid_count < drone_samples_per_model:
-                sim_data = self._run_single_simulation(scenario, "drone", "quadcopter", idx, apply_noise=apply_noise)
-                if len(sim_data["observations"]) >= min_frame_cutoff:
-                    results.append(sim_data)
-                    valid_count += 1
-                idx += 1
-        
-        # 6️. 데이터 대량 생산 완료 후 pkl 직렬화 물리 저장
-        # [수정] 구버전(v1) 자산을 훼손하지 않기 위해 파일명 버전 분리 정책 수립
-        pkl_name = "batch_raw_trajectories_v2.pkl" if apply_noise else "batch_raw_trajectories.pkl"
-        output_path = os.path.join(self.output_dir, pkl_name)
-        
-        with open(output_path, "wb") as f:
-            pickle.dump(results, f)
-
-        return output_path
 
 class CoreFeatureExtractor:
-    def __init__(self, data_dir: str, version: str = "v1"):
-        """
-        :param version: 'v1' (Ideal 기존형) 또는 'v2' (Noisy 실측형) 지정
-        """
-        self.data_dir = data_dir
-        # 버전에 따른 입출력 확장자 스키마 동적 매핑
-        if version == "v2":
-            self.input_path = os.path.join(data_dir, "batch_raw_trajectories_v2.pkl")
-            self.output_path = os.path.join(data_dir, "simulation_features_v2.csv")
-        else:
-            self.input_path = os.path.join(data_dir, "batch_raw_trajectories.pkl")
-            self.output_path = os.path.join(data_dir, "simulation_features.csv")
+    """Offline re-extraction shares exactly the function used for real tracks."""
+    def __init__(self, config=None):
+        self.config = config or FeatureConfig()
 
-    def extract_features(self) -> str:
-        if not os.path.exists(self.input_path):
-            raise FileNotFoundError(f"원천 시계열 바이너리가 {self.input_path}에 존재하지 않습니다.")
+    def process(self, raw_jsonl):
+        rows = []
+        for sample in read_jsonl(raw_jsonl):
+            meta = sample["metadata"]
+            if meta["simulator_version"] not in ("3.0.0", SIMULATOR_VERSION):
+                raise ValueError("Unsupported simulator version")
+            camera = meta["camera"]
+            result = extract_features(sample["track"]["history"], camera["width"], camera["height"],
+                                      meta["fps"], self.config)
+            if meta["latent_failure"]:
+                result.update(features=None, feature_status="rejected")
+                result["reasons"].append(meta["latent_failure"])
+            rows.append(dict(sample_id=meta["sample_id"], **result))
+        return rows
 
-        print("=" * 65)
-        print("[Phase 2] 물리/동역학 논문 기반 핵심 특징 추출(Feature Engineering) 시작")
-        print("=" * 65)
 
-        with open(self.input_path, "rb") as f:
-            raw_datasets = pickle.load(f)
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--samples-per-subtype", type=int, default=5)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--fps", type=float, default=30.)
+    parser.add_argument("--no-pairs", action="store_true")
+    args = parser.parse_args()
+    table = BatchRunner(args.output, args.fps, args.seed).run(args.samples_per_subtype, not args.no_pairs)
+    print(table.groupby(["label", "feature_status"], observed=True).size().to_string())
+    print(f"Artifacts: {args.output.resolve()}")
 
-        feature_rows = []
-
-        for sample in raw_datasets:
-            obs = sample["observations"]
-            label = sample["metadata"]["label"]
-            dt = 1.0 / sample["metadata"]["fps"]
-            N = len(obs)
-
-            # 초해상도 및 미분 연산 한계선 방어벽
-            if N < 3:
-                continue
-
-            # 벡터 연산 속도 향상을 위한 데이터 배열 변환
-            cx = np.array([p["cx"] for p in obs])
-            cy = np.array([p["cy"] for p in obs])
-            w = np.array([p["w"] for p in obs])
-
-            # 1️. [수식 적용] 순간 변위 및 신체 길이 정규화 속도(v_norm) 계산
-            dx = np.diff(cx)
-            dy = np.diff(cy)
-            displacement = np.sqrt(dx**2 + dy**2)
-            
-            # 원근 왜곡 제거를 위해 프레임의 몸길이(w)로 나눈 후 속도로 환산 (BL/s)
-            v_norm_series = displacement / (w[1:] * dt + 1e-6)
-            
-            v_mean = float(np.mean(v_norm_series))
-            v_std = float(np.std(v_norm_series))
-
-            # 2️. [수식 적용] 정규화 속도의 시간에 대한 1차 미분 (가속도 a_mean)
-            a_norm_series = np.abs(np.diff(v_norm_series)) / dt
-            a_mean = float(np.mean(a_norm_series))
-
-            # 3️. [수식 적용] 3번 논문 식 (3),(4) 360도 경계면 보정 방향 편차(heading_change_ratio) 정밀 산출
-            headings = np.degrees(np.arctan2(dy, dx))
-            headings = (headings + 360) % 360  # 0~360도로 변환 및 스케일 바인딩
-            
-            # 원형 통계학을 적용한 순환 평균 방향 획득
-            h_mean = circmean(headings, high=360, low=0)
-            
-            delta_h_list = []
-            for h_i in headings:
-                diff = abs(h_i - h_mean)
-                # 원형 공간 최단 기하 거리를 도출하는 수학적 공식 적용
-                shortest_diff = min(diff, 360.0 - diff)
-                delta_h_list.append(shortest_diff ** 2)
-            
-            raw_h_std = np.sqrt(np.sum(delta_h_list) / len(headings))
-            
-            # 최대 편차 한계(180도)로 나눠 shared schema 규격 (0.0~1.0 ratio)에 동기화
-            heading_change_ratio = float(raw_h_std / 180.0)
-
-            # 일차적인 파생 변수 로우 적재 (maneuverability_sigma 계산 전 임시 풀링)
-            feature_rows.append({
-                "v_mean": v_mean,
-                "v_std": v_std,
-                "a_mean": a_mean,
-                "heading_change_ratio": heading_change_ratio,
-                "label": label
-            })
-
-        df = pd.DataFrame(feature_rows)
-
-        # 4️. [수식 적용] 복합 기동성 지표 (maneuverability_sigma) 글로벌 풀 기반 정규화 산출
-        v_scaled = (df["v_mean"] - V_MIN) / (V_MAX - V_MIN + 1e-6)
-        h_scaled = (df["heading_change_ratio"] - H_MIN) / (H_MAX - H_MIN + 1e-6)
-
-        df["maneuverability_sigma"] = v_scaled / (h_scaled + 1e-6)
-
-        # 5️. C파트 담당자의 RandomForest 주입 변수 리스트 컬럼 명세 정렬 동기화
-        ordered_columns = ["v_mean", "v_std", "a_mean", "heading_change_ratio", "maneuverability_sigma", "label"]
-        df = df[ordered_columns]
-
-        # 물리 데이터 저장 발행
-        df.to_csv(self.output_path, index=False)
-        print(f"[Phase 2 완료] CSV 피처 매트릭스 테이블 발행 완료.")
-        print(f"저장 경로: {self.output_path}")
-        print("=" * 65)
-        return self.output_path
 
 if __name__ == "__main__":
-
-    current_script_dir = os.path.dirname(os.path.abspath(__file__))
-    target_data_dir = os.path.join(current_script_dir, "data")
-
-    # -----------------------------------------------------------------
-    # [실험 관리 트랙] 버전 2 (Sim2Real 고도화 노이즈 데이터셋 배포)
-    # -----------------------------------------------------------------
-    # 1. 50 FPS 가변 윈도우 및 노이즈가 주입된 v2 원천 pkl 팩토리 가동
-    runner_v2 = BatchRunner(output_dir=target_data_dir, fps=30)
-    runner_v2.execute_batch_pipeline(bird_samples_per_species=50, drone_samples_per_model=150, apply_noise=True)
-    
-    # 2. v2 전용 특징량 압축기 가동 -> simulation_features_v2.csv 최종 발행
-    extractor_v2 = CoreFeatureExtractor(data_dir=target_data_dir, version="v2")
-    extractor_v2.extract_features()
+    main()
