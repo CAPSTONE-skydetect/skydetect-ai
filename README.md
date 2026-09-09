@@ -25,9 +25,7 @@ skydetect-ai/
 │   ├── schemas.py                        # Shared A/B/C contract source
 │   ├── routers/
 │   │   ├── analyze.py                    # A: analysis endpoint
-│   │   ├── ui.py                         # A: upload and UI artifact endpoints
 │   │   └── classify.py                   # C: classify endpoint
-│   ├── static/                            # Manual ROI browser UI
 │   ├── services/
 │   │   ├── detector.py                   # A: unused future detector hook
 │   │   ├── manual_roi_tracker.py         # A: manual ROI tracking engine
@@ -96,9 +94,7 @@ skydetect-ai/
 uvicorn ai_server.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/` for the browser UI. It supports video upload,
-frame seeking, drag-to-select ROI, tracking tuning, overlay playback, and result
-downloads. Open `http://127.0.0.1:8000/docs` for the API documentation.
+Open `http://127.0.0.1:8000/docs` for the API documentation.
 
 The `/analyze` endpoint accepts a video path and an initial bounding box in source
 video pixel coordinates:
