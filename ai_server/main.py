@@ -8,7 +8,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="SkyDetect-AI",
         version="0.1.0",
-        description="Bootstrap API for track-sequence generation.",
+        description="Manual ROI tracking API for TrackSequence generation.",
     )
     app.include_router(analyze_router)
     app.include_router(classify_router)
