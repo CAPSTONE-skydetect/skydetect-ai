@@ -28,16 +28,16 @@ def test_dataset_roundtrip_split_disjoint_and_no_silent_retries(batch):
     assert set(table.split) == {"train", "validation", "test"}
     assert (table.groupby("scenario").split.nunique() == 3).all()
     assert set(table.subtype) == {"pigeon", "seagull", "falcon", "consumer_quad", "hover_quad", "racing_quad", "fixed_wing_drone"}
-    parsed = pd.read_csv(path / "simulation_features_v3.csv")
+    parsed = pd.read_csv(path / "simulation_features_v4.csv")
     validate_table(parsed)
     manifest = json.loads((path / "manifest.json").read_text())
     assert manifest["calibration_status"] == "uncalibrated_no_real_A"
-    samples = list(read_jsonl(path / "raw_trajectories_v3.jsonl"))
+    samples = list(read_jsonl(path / "raw_trajectories_v4.jsonl"))
     assert len(samples) == len(table)
     for first, second in zip(samples[::2], samples[1::2]):
         assert first["world_truth"] == second["world_truth"]
         assert first["metadata"]["split"] == second["metadata"]["split"]
-    reextracted = CoreFeatureExtractor().process(path / "raw_trajectories_v3.jsonl")
+    reextracted = CoreFeatureExtractor().process(path / "raw_trajectories_v4.jsonl")
     for original, result in zip(samples, reextracted):
         assert result["features"] == original["feature_result"]["features"]
 
@@ -46,13 +46,13 @@ def test_random_labels_and_stratified_summary_are_diagnostic_only(batch):
     _, table = batch
     result = evaluate_dataset(table)
     assert result["status"] == "completed"
-    assert set(result["ablations"]) == {"motion", "all", "bbox_only"}
+    assert set(result["ablations"]) == {"core", "variability", "all"}
     assert result["real_holdout"]["status"] == "not_measured_no_real_A"
     assert 0 <= result["ablations"]["all"]["balanced_accuracy"] <= 1
     summary = describe_dataset(table)
     assert summary["real_world_validity"] == "not_measured"
     assert summary["total"] == len(table)
-    assert summary["observation_sensitivity"]["v_mean"]["pairs"] > 0
+    assert summary["observation_sensitivity"]["speed_median"]["pairs"] > 0
     json.dumps(summary, allow_nan=False)
     json.dumps(result, allow_nan=False)
 
@@ -61,7 +61,7 @@ def test_heldout_changes_dont_change_fitted_model(batch):
     _, table = batch
     before = evaluate_dataset(table)
     changed = table.copy()
-    changed.loc[changed.split == "test", "v_mean"] *= 100
+    changed.loc[changed.split == "test", "speed_median"] *= 100
     after = evaluate_dataset(changed)
     assert before["ablations"]["all"]["feature_importance"] == after["ablations"]["all"]["feature_importance"]
 
@@ -80,7 +80,7 @@ def test_csv_contract_rejects_invalid_inputs(batch, error):
     elif error == "duplicate":
         table = pd.concat([table, table.iloc[:1]], ignore_index=True)
     else:
-        table.loc[index, "v_mean"] = np.nan
+        table.loc[index, "speed_median"] = np.nan
     with pytest.raises(ValueError):
         validate_table(table)
 
@@ -149,13 +149,13 @@ def test_grouped_comparison_detects_injected_shift_and_no_shift(batch):
     real["review_status"] = "approved"
     no_shift = compare_domains(synthetic, real)
     for label in ("bird", "drone"):
-        assert no_shift["classes"][label]["metrics"]["v_mean"]["wasserstein"] == pytest.approx(0.)
+        assert no_shift["classes"][label]["metrics"]["speed_median"]["wasserstein"] == pytest.approx(0.)
         assert no_shift["classes"][label]["real_real_split_distance_q05_q50_q95"] is not None
     real[FEATURE_COLUMNS] += 1000
     shifted = compare_domains(synthetic, real)
     for label in ("bird", "drone"):
         result = shifted["classes"][label]
-        assert result["metrics"]["v_mean"]["wasserstein"] == pytest.approx(1000.)
+        assert result["metrics"]["speed_median"]["wasserstein"] == pytest.approx(1000.)
         assert min(result["domain_classifier"]["fold_balanced_accuracy"]) > .9
 
 

@@ -8,7 +8,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import balanced_accuracy_score, confusion_matrix, f1_score, roc_auc_score
 
 from . import FEATURE_VERSION
-from .features import BBOX_COLUMNS, FEATURE_COLUMNS, MOTION_COLUMNS
+from .features import CORE_COLUMNS, FEATURE_COLUMNS, VARIABILITY_COLUMNS
 from .io import write_json
 
 
@@ -18,7 +18,7 @@ def validate_table(table):
     if not required.issubset(table.columns):
         raise ValueError(f"Missing columns: {sorted(required-set(table.columns))}")
     if table.empty or set(table.feature_version.astype(str)) != {FEATURE_VERSION}:
-        raise ValueError("Only feature version 3.0.0 is supported")
+        raise ValueError(f"Only feature version {FEATURE_VERSION} is supported")
     if table.feature_config_id.isna().any() or table.feature_config_id.nunique() != 1:
         raise ValueError("Feature configurations cannot be mixed")
     if table.sample_id.duplicated().any() or table.family_id.isna().any():
@@ -81,7 +81,8 @@ def evaluate_dataset(table, seed=42, real_table=None):
                   warning="Synthetic holdout measures simulator discrimination, not sim-to-real validity.",
                   selection="Fixed hyperparameters; validation and test are never used to fit or tune.", ablations={})
     trained = None
-    for name, columns in (("motion", MOTION_COLUMNS), ("bbox_only", BBOX_COLUMNS), ("all", FEATURE_COLUMNS)):
+    for name, columns in (("core", CORE_COLUMNS), ("variability", VARIABILITY_COLUMNS),
+                          ("all", FEATURE_COLUMNS)):
         model = make_model(seed).fit(train[columns], train.label)
         prediction = model.predict(test[columns])
         probability = model.predict_proba(test[columns])[:, list(model.classes_).index("drone")]

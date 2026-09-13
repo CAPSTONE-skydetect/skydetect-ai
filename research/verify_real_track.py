@@ -86,7 +86,7 @@ def main():
     config = FeatureConfig(**json.loads(args.feature_config.read_text(encoding="utf-8"))["feature_config"]) if args.feature_config else FeatureConfig()
     table, diagnostics = RealTrackVerifier(config).import_manifest(args.manifest)
     args.output.mkdir(parents=True, exist_ok=True)
-    table.to_csv(args.output / "real_features_v3.csv", index=False)
+    table.to_csv(args.output / "real_features_v4.csv", index=False)
     write_json(args.output / "real_import_report.json", diagnostics)
     print(f"Imported {len(table)} tracks. Feature acceptance is not manual tracking validation.")
 

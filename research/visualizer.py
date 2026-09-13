@@ -81,9 +81,9 @@ def main():
     parser.add_argument("dataset_dir", type=Path)
     parser.add_argument("--samples", type=int, default=8)
     args = parser.parse_args()
-    table = pd.read_csv(args.dataset_dir / "simulation_features_v3.csv")
+    table = pd.read_csv(args.dataset_dir / "simulation_features_v4.csv")
     plot_distributions(table, args.dataset_dir / "plots" / "distributions.png")
-    for i, sample in enumerate(read_jsonl(args.dataset_dir / "raw_trajectories_v3.jsonl")):
+    for i, sample in enumerate(read_jsonl(args.dataset_dir / "raw_trajectories_v4.jsonl")):
         if i >= args.samples:
             break
         plot_sample(sample, args.dataset_dir / "plots" / f"sample_{i:03d}.png")

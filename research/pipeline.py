@@ -1,4 +1,4 @@
-"""Reproducible latent flight -> optical projection -> A-like observations -> v3 features."""
+"""Reproducible latent flight -> optical projection -> A-like observations -> v4 features."""
 import argparse
 from dataclasses import asdict
 import hashlib
@@ -225,7 +225,7 @@ class BatchRunner:
                 import json
                 if json.loads(existing_manifest.read_text(encoding="utf-8"))["simulator_version"] != SIMULATOR_VERSION:
                     raise ValueError("Refusing to overwrite artifacts from a different simulator version")
-        path = self.output_dir / "raw_trajectories_v3.jsonl"
+        path = self.output_dir / "raw_trajectories_v4.jsonl"
 
         def generate():
             for scenario in scenarios:
@@ -251,7 +251,7 @@ class BatchRunner:
                                 yield sample
         write_jsonl(path, generate())
         table = pd.DataFrame(rows)
-        table.to_csv(self.output_dir / "simulation_features_v3.csv", index=False)
+        table.to_csv(self.output_dir / "simulation_features_v4.csv", index=False)
         manifest = dict(simulator_version=SIMULATOR_VERSION, feature_version=FEATURE_VERSION,
                         seed=self.seed, fps=self.fps, feature_config=asdict(self.feature_config),
                         feature_config_id=self.feature_config.fingerprint, noise_config=asdict(self.noise_config),
