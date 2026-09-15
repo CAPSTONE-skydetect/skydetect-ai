@@ -49,12 +49,12 @@ def test_small_end_to_end_exact_dataset(tmp_path):
     assert not (set(train.family_id) & set(test.family_id))
     assert manifest["family_leakage_count"] == 0
     assert len(ledger) == 4*4*7*2
-    assert (tmp_path/"candidate_ledger_v3.csv").exists()
+    assert (tmp_path/"candidate_ledger_v4.csv").exists()
     assert (tmp_path/"dataset_manifest.json").exists()
 
 
 def test_selected_csvs_retain_declared_splits(tmp_path):
     build_dataset(tmp_path, train_count=32, test_count=8, seed=7,
                   families_per_scenario=4, preview_per_combination=0)
-    assert set(pd.read_csv(tmp_path/"train_features_v3.csv").split) == {"train"}
-    assert set(pd.read_csv(tmp_path/"test_features_v3.csv").split) == {"test"}
+    assert set(pd.read_csv(tmp_path/"train_features_v4.csv").split) == {"train"}
+    assert set(pd.read_csv(tmp_path/"test_features_v4.csv").split) == {"test"}
