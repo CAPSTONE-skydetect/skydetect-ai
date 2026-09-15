@@ -1,4 +1,4 @@
-"""Time-aware research feature contract, deliberately distinct from runtime v1/v2."""
+"""Time-aware, bbox-independent research trajectory features."""
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -8,10 +8,12 @@ from scipy.signal import resample_poly, savgol_coeffs, savgol_filter
 
 from . import FEATURE_VERSION
 
-MOTION_COLUMNS = ["v_mean", "v_std", "a_mean", "turn_rate_mean", "turn_rate_p95",
-                  "heading_change_ratio", "straightness", "stationary_ratio"]
-BBOX_COLUMNS = ["bbox_area_mean", "bbox_area_cv", "bbox_scale_rate_std"]
-FEATURE_COLUMNS = MOTION_COLUMNS + BBOX_COLUMNS
+CORE_COLUMNS = ["speed_median", "acceleration_median", "turn_rate_median", "tortuosity"]
+VARIABILITY_COLUMNS = ["speed_cv", "acceleration_p95", "turn_rate_p95",
+                       "curvature_cv", "heading_change_ratio"]
+FEATURE_COLUMNS = ["speed_median", "speed_cv", "acceleration_median", "acceleration_p95",
+                   "turn_rate_median", "turn_rate_p95", "curvature_cv", "tortuosity",
+                   "heading_change_ratio"]
 
 
 @dataclass(frozen=True)
@@ -22,9 +24,10 @@ class FeatureConfig:
     max_missing_fraction: float = .5
     min_points: int = 5
     min_duration_seconds: float = .2
-    stationary_speed: float = .2
+    minimum_motion_px_s: float = 1.
     turn_threshold_rad_s: float = np.pi / 6
     heading_snr: float = 3.
+    tortuosity_cap: float = 100.
 
     def __post_init__(self):
         if not np.all(np.isfinite(list(asdict(self).values()))):
@@ -33,7 +36,8 @@ class FeatureConfig:
             raise ValueError("Invalid time configuration")
         if not 0 <= self.max_missing_fraction <= 1 or self.min_points < 3:
             raise ValueError("Invalid point or missingness threshold")
-        if min(self.min_duration_seconds, self.stationary_speed, self.turn_threshold_rad_s, self.heading_snr) < 0:
+        if min(self.min_duration_seconds, self.minimum_motion_px_s,
+               self.turn_threshold_rad_s, self.heading_snr) < 0 or self.tortuosity_cap < 1:
             raise ValueError("Feature thresholds must be nonnegative")
 
     @property
@@ -62,12 +66,22 @@ def _resample(values, intervals, source_intervals):
     return residual[:intervals+1]+np.linspace(values[0], values[-1], intervals+1)
 
 
+def _weighted_quantile(values, weights, quantile):
+    if not len(values):
+        return 0.
+    order = np.argsort(values)
+    cumulative = np.cumsum(weights[order])
+    return float(np.interp(quantile, cumulative / cumulative[-1], values[order]))
+
+
 def extract_features(history, image_width, image_height, fps=None, config=None):
     """Return an explicit rejection, never replace an invalid feature with zero.
 
     Timestamp milliseconds take precedence over fps; fps is only an explicit
     fallback when all timestamps are absent. Long gaps separate segments.
-    Width-normalization uses pixels for BOTH axes, preserving aspect ratio.
+    Positions are converted to pixels, but bbox dimensions never enter a feature
+    formula. Speeds therefore describe apparent image-plane motion, not physical
+    world speed or range-corrected motion.
     """
     cfg = config or FeatureConfig()
     result = dict(feature_version=FEATURE_VERSION, feature_config_id=cfg.fingerprint,
@@ -117,8 +131,8 @@ def extract_features(history, image_width, image_height, fps=None, config=None):
         if time[-1] * cfg.target_fps > 100000:
             raise ValueError("resampling_limit_exceeded")
         segments = np.split(np.arange(len(frame)), boundaries)
-        velocity, accel, turns, areas, scale_rates = [], [], [], [], []
-        straightness, lengths, retained = [], [], 0
+        velocity, accel, turns, curvature = [], [], [], []
+        tortuosity, lengths, retained = [], [], 0
         direction_candidates, direction_supported = 0, 0
         direction_duration = 0.
         for indices in segments:
@@ -133,18 +147,13 @@ def extract_features(history, image_width, image_height, fps=None, config=None):
                 raise ValueError("source_resampling_limit_exceeded")
             source_grid = np.linspace(t[0], t[-1], source_intervals+1)
             xy = np.column_stack([np.interp(source_grid, t, points[:, i]) for i in range(2)])
-            log_size = np.column_stack([np.interp(source_grid, t, np.log(points[:, i])) for i in (2, 3)])
             if source_intervals > intervals:
                 # Anti-alias BEFORE reducing sample rate; post-decimation smoothing
                 # cannot undo high-frequency jitter aliased into slow motion.
                 xy = _resample(xy, intervals, source_intervals)
-                log_size = _resample(log_size, intervals, source_intervals)
             raw_xy = xy * [image_width, image_height]
             xy = _smooth(raw_xy, step, cfg)
-            size = np.exp(_smooth(log_size, step, cfg)) * [image_width, image_height]
-            width = size[:, 0]
             pixel_velocity = np.diff(xy, axis=0) / step
-            pixel_acceleration = np.diff(pixel_velocity, axis=0) / step
             direction_floor = 0.
             window = _window(len(xy), step, cfg)
             if window >= 5:
@@ -152,33 +161,37 @@ def extract_features(history, image_width, image_height, fps=None, config=None):
                 # amplifying residual high frequencies by differencing twice.
                 v_at_points = savgol_filter(raw_xy, window, 2, deriv=1, delta=step, axis=0, mode="interp")
                 pixel_velocity = (v_at_points[:-1]+v_at_points[1:])/2
-                pixel_acceleration = savgol_filter(raw_xy, window, 2, deriv=2, delta=step, axis=0, mode="interp")[1:-1]
                 residual = raw_xy-xy
                 sigma = np.median(np.abs(residual-np.median(residual, axis=0)), axis=0)/.67448975
                 gain = np.linalg.norm(savgol_coeffs(window, 2, deriv=1, delta=step))
                 # Heuristic support gate, not a calibrated confidence interval.
                 direction_floor = cfg.heading_snr*np.linalg.norm(sigma)*gain
-            speed = np.linalg.norm(pixel_velocity, axis=1) / ((width[:-1] + width[1:]) / 2)
-            # Differentiate vector velocity BEFORE dividing by width: zoom alone
-            # must not masquerade as physical image acceleration.
-            acceleration = np.linalg.norm(pixel_acceleration, axis=1) / width[1:-1]
+            speed = np.linalg.norm(pixel_velocity, axis=1)
+            acceleration = np.abs(np.diff(speed)) / step
             angle = np.arctan2(pixel_velocity[:, 1], pixel_velocity[:, 0])
-            angular_rate = np.abs((np.diff(angle) + np.pi) % (2 * np.pi) - np.pi) / step
-            valid_turn = (speed[:-1] >= cfg.stationary_speed) & (speed[1:] >= cfg.stationary_speed)
+            angle_change = np.abs((np.diff(angle) + np.pi) % (2 * np.pi) - np.pi)
+            angular_rate = angle_change / step
+            arc_step = (speed[:-1] + speed[1:]) * step / 2
+            speed_floor = max(cfg.minimum_motion_px_s, direction_floor)
+            valid_turn = (speed[:-1] >= speed_floor) & (speed[1:] >= speed_floor)
             reliable = np.linalg.norm(pixel_velocity, axis=1) > direction_floor
             valid_turn &= reliable[:-1] & reliable[1:]
             direction_candidates += len(valid_turn)
             direction_supported += int(valid_turn.sum())
-            direction_duration += len(valid_turn)*step
+            direction_duration += len(angular_rate)*step
             angular_rate = angular_rate[valid_turn]
+            discrete_curvature = angle_change[valid_turn] / arc_step[valid_turn]
             velocity.append((speed, np.full(len(speed), step)))
             accel.append((acceleration, np.full(len(acceleration), step)))
             turns.append((angular_rate, np.full(len(angular_rate), step)))
-            area = size[:, 0] * size[:, 1] / image_width / image_height
-            areas.append((area, np.full(len(area), step)))
-            scale_rates.append((np.diff(np.log(width)) / step, np.full(intervals, step)))
+            curvature.append((discrete_curvature, np.full(len(discrete_curvature), step)))
             distance = float(np.linalg.norm(np.diff(xy, axis=0), axis=1).sum())
-            straightness.append(float(np.linalg.norm(xy[-1] - xy[0])) / distance if distance > 1e-8 else 0.)
+            displacement = float(np.linalg.norm(xy[-1] - xy[0]))
+            if distance <= 1e-8:
+                ratio = 1.
+            else:
+                ratio = min(distance / max(displacement, 1e-8), cfg.tortuosity_cap)
+            tortuosity.append(ratio)
             lengths.append(float(t[-1] - t[0]))
             retained += len(indices)
         if not velocity:
@@ -194,20 +207,25 @@ def extract_features(history, image_width, image_height, fps=None, config=None):
             mean = float(np.average(v, weights=w))
             return mean, float(np.sqrt(np.average((v - mean) ** 2, weights=w)))
 
-        v_mean, v_std = mean_std(velocity)
-        area_mean, area_std = mean_std(areas)
-        rates, weights = combine(turns)
         speeds, speed_weights = combine(velocity)
-        # Weighted quantile avoids giving short segments disproportionate weight.
-        order = np.argsort(rates)
-        p95 = float(np.interp(.95, np.cumsum(weights[order]) / weights.sum(), rates[order])) if len(rates) else 0.
-        features = dict(v_mean=v_mean, v_std=v_std, a_mean=mean_std(accel)[0],
-                        turn_rate_mean=mean_std(turns)[0], turn_rate_p95=p95,
+        accelerations, acceleration_weights = combine(accel)
+        rates, weights = combine(turns)
+        curvatures, curvature_weights = combine(curvature)
+        speed_mean, speed_std = mean_std(velocity)
+        curvature_mean, curvature_std = mean_std(curvature)
+        curvature_cv = (curvature_std / curvature_mean
+                        if curvature_mean > np.sqrt(np.finfo(float).eps) else 0.)
+        features = dict(
+                        speed_median=_weighted_quantile(speeds, speed_weights, .5),
+                        speed_cv=speed_std / max(speed_mean, 1e-12),
+                        acceleration_median=_weighted_quantile(accelerations, acceleration_weights, .5),
+                        acceleration_p95=_weighted_quantile(accelerations, acceleration_weights, .95),
+                        turn_rate_median=_weighted_quantile(rates, weights, .5),
+                        turn_rate_p95=_weighted_quantile(rates, weights, .95),
+                        curvature_cv=curvature_cv,
+                        tortuosity=float(np.average(tortuosity, weights=lengths)),
                         heading_change_ratio=float(weights[rates > cfg.turn_threshold_rad_s].sum()/direction_duration) if direction_duration else 0.,
-                        straightness=float(np.average(straightness, weights=lengths)),
-                        stationary_ratio=float(np.average(speeds < cfg.stationary_speed, weights=speed_weights)),
-                        bbox_area_mean=area_mean, bbox_area_cv=area_std / max(area_mean, 1e-12),
-                        bbox_scale_rate_std=mean_std(scale_rates)[1])
+                        )
         if not np.all(np.isfinite(list(features.values()))):
             raise ValueError("nonfinite_features")
         result.update(features=features, feature_status="accepted")

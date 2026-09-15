@@ -26,8 +26,9 @@ def analytic_probes():
                        for i in range(4*fps+1) if not missing or i % 8 not in (2, 3)]
             result = extract_features(history, 1920, 1080)
             f = result["features"]
-            results.append(dict(fps=fps, dropout=missing, velocity_error=abs(f["v_mean"]-1.),
-                                acceleration_error=f["a_mean"], accepted=result["feature_status"] == "accepted"))
+            results.append(dict(fps=fps, dropout=missing, velocity_error=abs(f["speed_median"]-20.),
+                                acceleration_error=f["acceleration_median"],
+                                accepted=result["feature_status"] == "accepted"))
     rng = np.random.default_rng(10)
     stationary = [dict(frame_index=i, timestamp_ms=i*1000/30,
                        cx=.5+rng.normal(0,.35)/1920, cy=.5+rng.normal(0,.35)/1080,
@@ -35,7 +36,8 @@ def analytic_probes():
     raw = extract_features(stationary, 1920, 1080, config=FeatureConfig(smoothing_seconds=0))["features"]
     smooth = extract_features(stationary, 1920, 1080)["features"]
     return dict(constant_motion=results, stationary_jitter=dict(raw=raw, smoothed=smooth,
-                acceleration_ratio=smooth["a_mean"]/raw["a_mean"], velocity_ratio=smooth["v_mean"]/raw["v_mean"]))
+                acceleration_ratio=smooth["acceleration_median"]/raw["acceleration_median"],
+                velocity_ratio=smooth["speed_median"]/raw["speed_median"]))
 
 
 def validate(output, samples_per_subtype=10, seed=20260906, stress=True):
@@ -50,7 +52,7 @@ def validate(output, samples_per_subtype=10, seed=20260906, stress=True):
     latent_failures = 0
     pairs_checked, previous = 0, None
     minimum_altitude, max_speed = float("inf"), 0.
-    for sample in read_jsonl(output / "raw_trajectories_v3.jsonl"):
+    for sample in read_jsonl(output / "raw_trajectories_v4.jsonl"):
         m, truth = sample["metadata"], sample["world_truth"]
         latent_failures += int(m["latent_failure"] is not None)
         for reason in sample["feature_result"]["reasons"]:

@@ -22,28 +22,31 @@ def feature(history, **kwargs):
 @pytest.mark.parametrize("fps", [15, 24, 30, 50, 60, 120])
 def test_constant_velocity_analytic_and_fps_invariant(fps):
     f = feature(line(fps=fps, vx=12, vy=16))
-    assert f["v_mean"] == pytest.approx(1., abs=1e-9)
-    assert f["a_mean"] < 1e-8
-    assert f["turn_rate_mean"] < 1e-8
-    assert f["straightness"] == pytest.approx(1.)
+    assert f["speed_median"] == pytest.approx(20., abs=1e-8)
+    assert f["speed_cv"] < 1e-9
+    assert f["acceleration_median"] < 1e-8
+    assert f["acceleration_p95"] < 1e-7
+    assert f["turn_rate_median"] < 1e-8
+    assert f["curvature_cv"] == 0
+    assert f["tortuosity"] == pytest.approx(1.)
 
 
 def test_gap_interpolation_uses_elapsed_time():
     full = line()
     partial = [p for i, p in enumerate(full) if i % 8 not in (2, 3)]
     f = feature(partial)
-    assert f["v_mean"] == pytest.approx(1., abs=1e-9)
-    assert f["a_mean"] < 1e-8
+    assert f["speed_median"] == pytest.approx(20., abs=1e-8)
+    assert f["acceleration_median"] < 1e-8
     result = extract_features(partial, 1920, 1080)
     assert .2 < result["quality"]["missing_fraction"] < .3
 
 
 def test_explicit_frame_clock_and_timestamp_priority():
     history = line()
-    assert feature(history, fps=100)["v_mean"] == pytest.approx(1.)
+    assert feature(history, fps=100)["speed_median"] == pytest.approx(20.)
     for p in history:
         del p["timestamp_ms"]
-    assert feature(history, fps=30)["v_mean"] == pytest.approx(1.)
+    assert feature(history, fps=30)["speed_median"] == pytest.approx(20.)
     assert extract_features(history, 1920, 1080)["feature_status"] == "rejected"
 
 
@@ -53,37 +56,39 @@ def test_long_gap_is_not_bridged():
     assert result["quality"]["usable_segments"] == 2
     assert result["quality"]["long_gap_count"] == 1
     assert result["quality"]["retained_duration_seconds"] < 3.3
-    assert result["features"]["v_mean"] == pytest.approx(1.)
+    assert result["features"]["speed_median"] == pytest.approx(20.)
 
 
-def test_stationary_and_scale_only_dont_invent_acceleration():
+def test_stationary_and_scale_only_dont_invent_motion():
     history = line(vx=0)
     for i, p in enumerate(history):
         p["w"] *= 1+i/len(history)
     f = feature(history)
-    assert f["v_mean"] < 1e-8
-    assert f["a_mean"] < 1e-8
-    assert f["turn_rate_mean"] == 0
-    assert f["stationary_ratio"] == 1
+    assert f["speed_median"] < 1e-8
+    assert f["acceleration_median"] < 1e-8
+    assert f["turn_rate_median"] == 0
+    assert f["tortuosity"] == 1
 
 
-def test_vector_acceleration_captures_constant_speed_turn():
+def test_constant_speed_turn_separates_turning_from_scalar_acceleration():
     history = line(fps=60)
     for p in history:
         t = p["timestamp_ms"]/1000
         p["cx"] = (500+100*np.cos(.5*t))/1920
         p["cy"] = (500+100*np.sin(.5*t))/1080
     f = feature(history)
-    assert f["v_mean"] == pytest.approx(2.5, rel=.01)
-    assert f["a_mean"] == pytest.approx(1.25, rel=.03)
-    assert f["turn_rate_mean"] == pytest.approx(.5, rel=.03)
+    assert f["speed_median"] == pytest.approx(50., rel=.01)
+    assert f["acceleration_median"] < .02
+    assert f["turn_rate_median"] == pytest.approx(.5, rel=.03)
 
 
-def test_bbox_change_does_not_differentiate_normalized_speed():
-    history = line()
-    for i, p in enumerate(history):
-        p["w"] *= 1+i/len(history)
-    assert feature(history)["a_mean"] < 1e-8
+def test_all_features_are_bbox_independent():
+    history = line(vx=12, vy=16)
+    changed = copy.deepcopy(history)
+    for i, p in enumerate(changed):
+        p["w"] *= .5 + i/len(changed)
+        p["h"] *= 1.5 - .5*i/len(changed)
+    assert feature(changed) == pytest.approx(feature(history))
 
 
 def test_heading_order_is_retained():
@@ -95,15 +100,17 @@ def test_heading_order_is_retained():
             y += 1 if (i//switch_every) % 2 else -1
             p.update(cx=x/1920, cy=y/1080)
         return feature(points, config=FeatureConfig(smoothing_seconds=0))
-    assert zigzag(3)["turn_rate_mean"] > 20*zigzag(120)["turn_rate_mean"]
+    assert zigzag(3)["turn_rate_p95"] > 20*zigzag(120)["turn_rate_p95"]
 
 
-def test_pixel_aspect_ratio_and_resolution_invariance():
+def test_pixel_aspect_ratio_and_scale_free_features():
     a = feature(line(vx=0, vy=20))
     history = line(vx=0, vy=20)
     b = extract_features(history, 3840, 2160)["features"]
-    assert a["v_mean"] == pytest.approx(1.)
-    assert b == pytest.approx(a)
+    assert a["speed_median"] == pytest.approx(20.)
+    assert b["speed_median"] == pytest.approx(40.)
+    for name in ("speed_cv", "curvature_cv", "tortuosity", "heading_change_ratio"):
+        assert b[name] == pytest.approx(a[name])
 
 
 def test_downsampling_filters_high_frequency_jitter_before_aliasing():
@@ -111,7 +118,7 @@ def test_downsampling_filters_high_frequency_jitter_before_aliasing():
     for p in history:
         p["cx"] += 5*np.sin(2*np.pi*30.5*p["timestamp_ms"]/1000)/1920
     f = feature(history)
-    assert f["v_mean"] < .08
+    assert f["speed_median"] < 1.6
 
 
 def test_smoothing_reduces_stationary_jitter_not_claimed_as_ground_truth():
@@ -122,8 +129,8 @@ def test_smoothing_reduces_stationary_jitter_not_claimed_as_ground_truth():
         p["cy"] += rng.normal(0, .35)/1080
     raw = feature(points, config=FeatureConfig(smoothing_seconds=0))
     smoothed = feature(points)
-    assert smoothed["a_mean"] < .35*raw["a_mean"]
-    assert smoothed["v_mean"] < .5*raw["v_mean"]
+    assert smoothed["acceleration_median"] < .35*raw["acceleration_median"]
+    assert smoothed["speed_median"] < .5*raw["speed_median"]
     assert smoothed["heading_change_ratio"] < .05
     assert extract_features(points, 1920, 1080)["quality"]["heading_valid_fraction"] < .1
 
@@ -164,7 +171,8 @@ def test_input_not_mutated_and_config_fingerprinted():
     assert FeatureConfig().fingerprint != FeatureConfig(smoothing_seconds=.5).fingerprint
 
 
-@pytest.mark.parametrize("kwargs", [{"target_fps":0}, {"smoothing_seconds":-1}, {"max_missing_fraction":2}, {"stationary_speed":-1}])
+@pytest.mark.parametrize("kwargs", [{"target_fps":0}, {"smoothing_seconds":-1}, {"max_missing_fraction":2},
+                                    {"minimum_motion_px_s":-1}, {"tortuosity_cap":.5}])
 def test_invalid_config(kwargs):
     with pytest.raises(ValueError):
         FeatureConfig(**kwargs)

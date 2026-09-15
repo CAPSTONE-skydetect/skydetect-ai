@@ -18,5 +18,5 @@ def test_notebook_executes_with_project_interpreter(tmp_path, monkeypatch):
     executed = client.execute(cleanup_kc=True)
     assert client.km is None
     assert all(cell.execution_count is not None for cell in executed.cells if cell.cell_type == "code")
-    assert (tmp_path / "simulation_features_v3.csv").exists()
+    assert (tmp_path / "simulation_features_v4.csv").exists()
     assert (tmp_path / "feature_ecdf.png").stat().st_size > 10000

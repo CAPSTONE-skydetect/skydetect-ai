@@ -146,11 +146,11 @@ def build_dataset(output_dir, train_count=8000, test_count=2000, seed=20260906,
     if set(train.family_id) & set(test.family_id):
         raise AssertionError("Family leakage between train and test")
     output.mkdir(parents=True, exist_ok=True)
-    ledger.to_csv(output/"candidate_ledger_v3.csv", index=False)
-    train.to_csv(output/"train_features_v3.csv", index=False)
-    test.to_csv(output/"test_features_v3.csv", index=False)
+    ledger.to_csv(output/"candidate_ledger_v4.csv", index=False)
+    train.to_csv(output/"train_features_v4.csv", index=False)
+    test.to_csv(output/"test_features_v4.csv", index=False)
     if previews:
-        write_jsonl(output/"preview_trajectories_v3.jsonl", previews)
+        write_jsonl(output/"preview_trajectories_v4.jsonl", previews)
     source_files = sorted(Path(__file__).resolve().parent.glob("*.py"))
     manifest = dict(simulator_version=SIMULATOR_VERSION, feature_version=FEATURE_VERSION,
                     feature_config=asdict(runner.feature_config), feature_config_id=runner.feature_config.fingerprint,
