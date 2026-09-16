@@ -116,7 +116,10 @@ Outputs:
 
 Threshold reports contain both an observed-frame ratio and a full-GT ratio.
 The latter counts missing predictions as failures and is the end-to-end number
-to use when comparing tracker versions.
+to use when comparing full-length tracker versions. They also include an
+`attempted_window_ratio`, which counts misses as failures but limits the
+denominator to frames A actually processed. Use this for deliberately partial
+runs such as `max_seconds` experiments.
 
 ## Trimmed inputs and partial processing
 

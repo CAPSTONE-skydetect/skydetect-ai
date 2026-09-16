@@ -40,6 +40,9 @@ def test_evaluates_cvat_against_resized_raw_trajectory(tmp_path: Path) -> None:
     assert report["localization"]["observed_frame_error_px"]["median"] == 0.0
     assert report["timeline"]["missing_frame_ranges"] == [[2, 2]]
     assert report["timeline"]["early_termination_frames"] == 1
+    assert report["localization"]["pixel_threshold_success"]["within_5_px"][
+        "attempted_window_ratio"
+    ] == pytest.approx(2 / 3)
 
 
 def test_explicit_transform_supports_letterbox_coordinates(tmp_path: Path) -> None:

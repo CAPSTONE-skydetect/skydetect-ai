@@ -386,13 +386,30 @@ def evaluate_track(
         if attempted_frame_count is not None
         else set()
     )
+    attempted_frame_scores = [
+        score for score in frame_scores if score["frame_index"] in attempted_gt_frames
+    ]
+    attempted_errors_px = [score["error_px"] for score in attempted_frame_scores]
+    attempted_normalized_errors = [
+        score["error_bbox_diagonal"] for score in attempted_frame_scores
+    ]
     pixel_success = {
-        _threshold_key(value, "px"): _success_metrics(errors_px, value, gt_count)
+        _threshold_key(value, "px"): _success_metrics(
+            errors_px,
+            value,
+            gt_count,
+            attempted_values=attempted_errors_px,
+            attempted_gt_count=len(attempted_gt_frames),
+        )
         for value in pixel_thresholds
     }
     normalized_success = {
         _threshold_key(value, "bbox_diagonal"): _success_metrics(
-            normalized_errors, value, gt_count
+            normalized_errors,
+            value,
+            gt_count,
+            attempted_values=attempted_normalized_errors,
+            attempted_gt_count=len(attempted_gt_frames),
         )
         for value in normalized_thresholds
     }
@@ -609,13 +626,25 @@ def _distribution(values: list[float]) -> dict[str, float | int | None]:
     }
 
 
-def _success_metrics(values: list[float], threshold: float, gt_count: int) -> dict[str, Any]:
+def _success_metrics(
+    values: list[float],
+    threshold: float,
+    gt_count: int,
+    *,
+    attempted_values: list[float],
+    attempted_gt_count: int,
+) -> dict[str, Any]:
     passed = sum(value <= threshold for value in values)
+    attempted_passed = sum(value <= threshold for value in attempted_values)
     return {
         "threshold": threshold,
         "passed_frames": passed,
         "observed_frame_ratio": passed / len(values) if values else None,
         "full_gt_ratio": passed / gt_count,
+        "attempted_window_passed_frames": attempted_passed,
+        "attempted_window_ratio": (
+            attempted_passed / attempted_gt_count if attempted_gt_count else None
+        ),
     }
 
 
