@@ -145,6 +145,15 @@ def test_dataset_manifest_writes_machine_and_human_reports(tmp_path: Path) -> No
     assert (output_dir / "summary.csv").exists()
     assert (output_dir / "report.html").exists()
     assert (output_dir / "per_video" / "sample-a.json").exists()
+    summary = (output_dir / "summary.csv").read_text(encoding="utf-8")
+    assert "attempted_window_gt_frames" in summary
+    assert "within_0_5_bbox_attempted_ratio" in summary
+    summary_json = json.loads(
+        (output_dir / "summary.json").read_text(encoding="utf-8")
+    )
+    assert summary_json["aggregate"]["micro"][
+        "attempted_window_observation_ratio"
+    ] == pytest.approx(2 / 3)
 
 
 def _write_sample_files(

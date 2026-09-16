@@ -94,7 +94,8 @@ python -m research.tracking_evaluation dataset evaluation_dataset \
 
 Outputs:
 
-- `summary.json`: complete machine-readable batch report
+- `summary.json`: complete machine-readable batch report with micro-aggregated
+  attempted-window metrics
 - `summary.csv`: one row per video for analysis and plotting
 - `report.html`: compact human-readable table
 - `per_video/<sample_id>.json`: frame-level errors and failure ranges

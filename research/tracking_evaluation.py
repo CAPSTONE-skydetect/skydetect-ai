@@ -452,6 +452,9 @@ def evaluate_track(
                 else None
             ),
             "attempted_window_gt_frames": len(attempted_gt_frames),
+            "attempted_window_matched_frames": len(
+                attempted_gt_frames & prediction_frames
+            ),
             "attempted_window_observation_ratio": (
                 len(attempted_gt_frames & prediction_frames) / len(attempted_gt_frames)
                 if attempted_gt_frames
@@ -608,9 +611,91 @@ def evaluate_dataset(root: str | Path, output_dir: str | Path) -> list[dict[str,
     _write_html_report(output_root / "report.html", reports)
     write_json(
         output_root / "summary.json",
-        {"status": "completed", "sample_count": len(reports), "samples": reports},
+        {
+            "status": "completed",
+            "sample_count": len(reports),
+            "aggregate": _aggregate_reports(reports),
+            "samples": reports,
+        },
     )
     return reports
+
+
+def _aggregate_reports(reports: list[dict[str, Any]]) -> dict[str, Any]:
+    attempted_gt_count = sum(
+        report["coverage"]["attempted_window_gt_frames"] for report in reports
+    )
+    attempted_matched_count = sum(
+        report["coverage"]["attempted_window_matched_frames"] for report in reports
+    )
+    attempted_frames = []
+    for report in reports:
+        start = report["timeline"]["attempted_first_frame"]
+        end = report["timeline"]["attempted_last_frame"]
+        attempted_frames.extend(
+            frame for frame in report["frames"] if start <= frame["frame_index"] <= end
+        )
+    pixel_errors = [frame["error_px"] for frame in attempted_frames]
+    normalized_errors = [
+        frame["error_bbox_diagonal"] for frame in attempted_frames
+    ]
+
+    pixel_thresholds = reports[0]["localization"]["pixel_threshold_success"]
+    normalized_thresholds = reports[0]["localization"][
+        "normalized_threshold_success"
+    ]
+    micro_pixel_success = {
+        key: _safe_ratio(
+            sum(
+                report["localization"]["pixel_threshold_success"][key][
+                    "attempted_window_passed_frames"
+                ]
+                for report in reports
+            ),
+            attempted_gt_count,
+        )
+        for key in pixel_thresholds
+    }
+    micro_normalized_success = {
+        key: _safe_ratio(
+            sum(
+                report["localization"]["normalized_threshold_success"][key][
+                    "attempted_window_passed_frames"
+                ]
+                for report in reports
+            ),
+            attempted_gt_count,
+        )
+        for key in normalized_thresholds
+    }
+    sample_coverage = [
+        report["coverage"]["attempted_window_observation_ratio"]
+        for report in reports
+        if report["coverage"]["attempted_window_observation_ratio"] is not None
+    ]
+    return {
+        "micro": {
+            "attempted_window_gt_frames": attempted_gt_count,
+            "attempted_window_matched_frames": attempted_matched_count,
+            "attempted_window_observation_ratio": _safe_ratio(
+                attempted_matched_count, attempted_gt_count
+            ),
+            "error_px": _distribution(pixel_errors),
+            "error_bbox_diagonal": _distribution(normalized_errors),
+            "pixel_threshold_success": micro_pixel_success,
+            "normalized_threshold_success": micro_normalized_success,
+        },
+        "macro": {
+            "sample_count": len(reports),
+            "mean_attempted_window_observation_ratio": (
+                float(np.mean(sample_coverage)) if sample_coverage else None
+            ),
+        },
+    }
+
+
+def _safe_ratio(numerator: int, denominator: int) -> float | None:
+    return numerator / denominator if denominator else None
 
 
 def _distribution(values: list[float]) -> dict[str, float | int | None]:
@@ -760,11 +845,13 @@ def _summary_row(report: dict[str, Any]) -> dict[str, Any]:
     error = report["localization"]["observed_frame_error_px"]
     normalized = report["localization"]["observed_frame_error_bbox_diagonal"]
     pixel_success = report["localization"]["pixel_threshold_success"]
+    normalized_success = report["localization"]["normalized_threshold_success"]
     coverage = report["coverage"]
     return {
         "sample_id": report["sample_id"],
         "label": report["target"]["label"],
         "gt_visible_frames": report["counts"]["gt_visible_frames"],
+        "attempted_window_gt_frames": coverage["attempted_window_gt_frames"],
         "matched_visible_frames": report["counts"]["matched_visible_frames"],
         "full_gt_observation_ratio": coverage["full_gt_observation_ratio"],
         "active_span_observation_ratio": coverage["active_span_observation_ratio"],
@@ -774,8 +861,21 @@ def _summary_row(report: dict[str, Any]) -> dict[str, Any]:
         "median_error_px": error["median"],
         "p95_error_px": error["p95"],
         "median_error_bbox_diagonal": normalized["median"],
+        "p95_error_bbox_diagonal": normalized["p95"],
         "within_5px_full_gt_ratio": pixel_success["within_5_px"]["full_gt_ratio"],
         "within_10px_full_gt_ratio": pixel_success["within_10_px"]["full_gt_ratio"],
+        "within_10px_attempted_ratio": pixel_success["within_10_px"][
+            "attempted_window_ratio"
+        ],
+        "within_20px_attempted_ratio": pixel_success["within_20_px"][
+            "attempted_window_ratio"
+        ],
+        "within_0_25_bbox_attempted_ratio": normalized_success[
+            "within_0_25_bbox_diagonal"
+        ]["attempted_window_ratio"],
+        "within_0_5_bbox_attempted_ratio": normalized_success[
+            "within_0_5_bbox_diagonal"
+        ]["attempted_window_ratio"],
         "longest_missing_run_frames": report["timeline"]["longest_missing_run_frames"],
         "early_termination_frames": report["timeline"]["early_termination_frames"],
     }
