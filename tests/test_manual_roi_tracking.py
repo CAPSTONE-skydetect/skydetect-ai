@@ -59,6 +59,12 @@ def test_track_exports_actual_post_resize_resolution(tmp_path: Path) -> None:
     assert result.metadata["height"] == 400
     assert result.track.processed_width == 320
     assert result.track.processed_height == 200
+    assert result.metadata["preprocessing"]["mode"] == "resize"
+    assert result.metadata["original_to_processed"] == [
+        [0.5, 0.0, 0.0],
+        [0.0, 0.5, 0.0],
+        [0.0, 0.0, 1.0],
+    ]
 
 
 def test_predictions_stay_out_of_track_history(tmp_path: Path) -> None:
