@@ -26,6 +26,8 @@ The current contract owner is `ai_server/schemas.py`.
 - Internal prediction-only frames are not part of `history`; their absence is a
   frame-index gap
 - `TrackPoint` coordinates and sizes are normalized to `[0, 1]`
+- `TrackSequence.processed_width` and `processed_height` are the exact frame
+  dimensions used as the normalization denominators, after any A-side resize
 - When stabilization is applied, `cx` and `cy` are camera-motion-compensated
 - `TrackPoint.conf` is observation confidence, not detector confidence
 - `StabilizationInfo` is included in `TrackSequence` so downstream stages know whether A applied global motion compensation

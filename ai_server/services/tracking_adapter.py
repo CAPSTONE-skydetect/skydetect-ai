@@ -53,6 +53,8 @@ def observations_to_track_sequence(
     return TrackSequence(
         track_id=track_id,
         source_video_id=source_video_id,
+        processed_width=frame_width,
+        processed_height=frame_height,
         stabilization=StabilizationInfo(
             applied=stabilize,
             method="opencv_feature_cmc" if stabilize else "none",

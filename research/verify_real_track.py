@@ -54,7 +54,7 @@ class RealTrackVerifier:
                     raise ValueError("Duplicate track/video identity")
                 ids.add(sample_id)
                 history = track["history"]
-                result = extract_features(history, entry["frame_width"], entry["frame_height"],
+                result = extract_features(history, track["processed_width"], track["processed_height"],
                                           entry.get("fps"), self.config)
                 row = dict(sample_id=sample_id, family_id=f"real:{group}", label=entry["label"],
                            subtype=entry.get("subtype", "unknown"), split=entry["split"],

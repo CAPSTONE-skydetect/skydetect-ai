@@ -207,6 +207,8 @@ class BatchRunner:
                         integration_max_step_s=agent.integration_step_s,
                         events=events, latent_failure=failure, observation=observation_meta)
         return dict(metadata=metadata, track=dict(track_id=int(sample_index), source_video_id=family,
+                                                 processed_width=camera.width,
+                                                 processed_height=camera.height,
                                                  history=observations, quality=observation_meta["quality"]),
                     world_truth=latent, optical_truth=optical, feature_result=feature_result)
 

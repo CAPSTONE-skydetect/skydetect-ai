@@ -245,6 +245,8 @@ class TrajectoryGenerator:
         if not observations:
             raise ValueError("No visible observations; use BatchRunner to retain rejection diagnostics")
         return {"track_id": track_id, "history": observations,
+                "processed_width": self.env.camera.width,
+                "processed_height": self.env.camera.height,
                 "source_video_id": f"synthetic-{seed}", "quality": metadata["quality"]}
 
     def save(self, data, filename=None):

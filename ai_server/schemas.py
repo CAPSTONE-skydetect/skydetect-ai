@@ -152,15 +152,27 @@ class TrackSequence(StrictModel):
 
     필드:
         track_id (int): track 식별자
-        history (list[TrackPoint]): 프레임별 좌표/크기 목록
         source_video_id (str | None): 원본 영상 식별자
+        processed_width (int): 좌표 정규화에 사용한 처리 프레임 너비
+        processed_height (int): 좌표 정규화에 사용한 처리 프레임 높이
+        history (list[TrackPoint]): 프레임별 좌표/크기 목록
         stabilization (StabilizationInfo | None): 영상 보정 정보
         quality (TrackQuality | None): track 품질 요약
     """
 
     track_id: int = Field(..., ge=0)
-    history: list[TrackPoint] = Field(..., min_length=1, description="프레임별 위치 목록")
     source_video_id: str | None = None
+    processed_width: int = Field(
+        ...,
+        ge=1,
+        description="cx/w 정규화에 사용한 처리 프레임 너비",
+    )
+    processed_height: int = Field(
+        ...,
+        ge=1,
+        description="cy/h 정규화에 사용한 처리 프레임 높이",
+    )
+    history: list[TrackPoint] = Field(..., min_length=1, description="프레임별 위치 목록")
     stabilization: StabilizationInfo | None = None
     quality: TrackQuality | None = None
 

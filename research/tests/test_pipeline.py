@@ -93,7 +93,7 @@ def real_fixture(tmp_path):
     write_json(tmp_path / "track.json", track)
     entry = dict(track_path="track.json", source_group_id="original-session-1", label="drone",
                  split="calibration", coordinate_space="post_cmc_residual_observation",
-                 frame_width=1920, frame_height=1080, review_status="approved")
+                 review_status="approved")
     write_json(tmp_path / "manifest.json", {"videos": [entry]})
     return sample, entry
 
@@ -110,7 +110,8 @@ def test_real_import_shares_feature_code_and_provenance(tmp_path):
 def test_real_import_rejects_ambiguous_contract(tmp_path, error):
     sample, entry = real_fixture(tmp_path)
     if error == "resolution":
-        del entry["frame_width"]
+        del sample["track"]["processed_width"]
+        write_json(tmp_path / "track.json", sample["track"])
     elif error == "unstabilized":
         sample["track"]["stabilization"]["applied"] = False
         write_json(tmp_path / "track.json", sample["track"])

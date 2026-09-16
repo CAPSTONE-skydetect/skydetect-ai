@@ -14,13 +14,16 @@ stable, high-quality `TrackSequence` outputs for downstream feature extraction.
 5. Recover weak or lost observations with appearance and residual motion cues.
 6. Apply feature-based camera motion compensation when requested.
 7. Convert only accepted observations into normalized `TrackSequence.history`.
-8. Evaluate track quality and persist the shared JSON plus debug artifacts.
+8. Store the processed frame dimensions used to normalize the coordinates.
+9. Evaluate track quality and persist the shared JSON plus debug artifacts.
 
 ## Notes
 
 - YOLOMG is intentionally not used by this pipeline.
 - `prediction` states are written to debug CSV and omitted from `history`.
 - Missing frames stay as frame-index gaps for B to interpolate.
+- `processed_width` and `processed_height` describe the post-resize frame used
+  to normalize `cx`, `cy`, `w`, and `h`; they are not always the source size.
 - With CMC enabled, `cx` and `cy` use compensated coordinates. Debug overlays
   continue to use source-frame coordinates.
 - `conf` is the combined observation confidence from KLT, appearance, motion,

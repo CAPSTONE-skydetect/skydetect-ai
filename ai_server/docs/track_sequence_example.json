@@ -1,6 +1,8 @@
 {
   "track_id": 1,
   "source_video_id": "sample_clip_001",
+  "processed_width": 1280,
+  "processed_height": 720,
   "stabilization": {
     "applied": true,
     "method": "ffmpeg_vidstab"

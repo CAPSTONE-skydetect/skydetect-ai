@@ -29,6 +29,8 @@ def test_tracks_twenty_pixel_target_and_exports_contract(tmp_path: Path) -> None
 
     assert len(result.track.history) >= 40
     assert result.track.history[-1].cx > result.track.history[0].cx + 0.20
+    assert result.track.processed_width == 320
+    assert result.track.processed_height == 200
     assert result.track.quality is not None
     assert result.metrics["visible_ratio"] > 0.75
     assert result.metrics["tracking_source_counts"]["klt"] > 20
@@ -36,6 +38,27 @@ def test_tracks_twenty_pixel_target_and_exports_contract(tmp_path: Path) -> None
     track_path = Path(result.artifacts["track_sequence"] or "")
     persisted = TrackSequence.model_validate_json(track_path.read_text(encoding="utf-8"))
     assert persisted == result.track
+
+
+def test_track_exports_actual_post_resize_resolution(tmp_path: Path) -> None:
+    video_path = tmp_path / "resized_target.mp4"
+    _make_twenty_pixel_video(video_path, frame_count=20, scale=2)
+
+    result = process_manual_roi_video(
+        str(video_path),
+        source_video_id="resized-target",
+        output_dir=tmp_path / "outputs",
+        target_bbox=(80.0, 108.0, 64.0, 64.0),
+        max_seconds=1.0,
+        stabilize=False,
+        resize_width=320,
+        write_overlay=False,
+    )
+
+    assert result.metadata["width"] == 640
+    assert result.metadata["height"] == 400
+    assert result.track.processed_width == 320
+    assert result.track.processed_height == 200
 
 
 def test_predictions_stay_out_of_track_history(tmp_path: Path) -> None:
@@ -130,6 +153,8 @@ def test_analyze_endpoint_returns_manual_roi_track(
     assert payload["source_video_id"] == "api-target"
     assert len(payload["tracks"]) == 1
     track = TrackSequence.model_validate(payload["tracks"][0])
+    assert track.processed_width == 320
+    assert track.processed_height == 200
     assert len(track.history) >= 15
     assert all(
         current.frame_index > previous.frame_index
@@ -142,8 +167,9 @@ def _make_twenty_pixel_video(
     frame_count: int = 48,
     fps: float = 20.0,
     occluded_frames: set[int] | None = None,
+    scale: int = 1,
 ) -> None:
-    width, height = 320, 200
+    width, height = 320 * scale, 200 * scale
     writer = cv2.VideoWriter(
         str(path),
         cv2.VideoWriter_fourcc(*"mp4v"),
@@ -154,25 +180,25 @@ def _make_twenty_pixel_video(
 
     for frame_index in range(frame_count):
         frame = np.full((height, width, 3), (205, 214, 222), dtype=np.uint8)
-        center_x = int(round(56 + frame_index * 2.0))
-        center_y = int(round(70 + np.sin(frame_index / 8.0) * 5.0))
+        center_x = int(round((56 + frame_index * 2.0) * scale))
+        center_y = int(round((70 + np.sin(frame_index / 8.0) * 5.0) * scale))
         if not occluded_frames or frame_index not in occluded_frames:
             cv2.line(
                 frame,
-                (center_x - 10, center_y),
-                (center_x + 10, center_y),
+                (center_x - 10 * scale, center_y),
+                (center_x + 10 * scale, center_y),
                 (25, 31, 37),
-                3,
+                3 * scale,
             )
             cv2.line(
                 frame,
-                (center_x, center_y - 6),
-                (center_x, center_y + 6),
+                (center_x, center_y - 6 * scale),
+                (center_x, center_y + 6 * scale),
                 (25, 31, 37),
-                3,
+                3 * scale,
             )
-            cv2.circle(frame, (center_x, center_y), 4, (238, 242, 245), -1)
-            cv2.circle(frame, (center_x, center_y), 5, (25, 31, 37), 1)
+            cv2.circle(frame, (center_x, center_y), 4 * scale, (238, 242, 245), -1)
+            cv2.circle(frame, (center_x, center_y), 5 * scale, (25, 31, 37), scale)
         writer.write(frame)
 
     writer.release()
