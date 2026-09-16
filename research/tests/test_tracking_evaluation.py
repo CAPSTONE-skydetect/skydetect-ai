@@ -34,6 +34,9 @@ def test_evaluates_cvat_against_resized_raw_trajectory(tmp_path: Path) -> None:
     }
     assert report["coverage"]["full_gt_observation_ratio"] == pytest.approx(2 / 3)
     assert report["coverage"]["active_span_observation_ratio"] == 1.0
+    assert report["coverage"]["attempted_window_observation_ratio"] == pytest.approx(
+        2 / 3
+    )
     assert report["localization"]["observed_frame_error_px"]["median"] == 0.0
     assert report["timeline"]["missing_frame_ranges"] == [[2, 2]]
     assert report["timeline"]["early_termination_frames"] == 1
@@ -82,6 +85,37 @@ def test_legacy_aspect_ratio_change_is_rejected_without_transform(tmp_path: Path
 
     with pytest.raises(TrackingEvaluationError, match="explicit transform"):
         load_video_geometry(metadata_path)
+
+
+def test_explicit_track_ids_merge_non_overlapping_cvat_fragments(tmp_path: Path) -> None:
+    gt_path, trajectory_path, metadata_path = _write_sample_files(tmp_path)
+    gt_path.write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<annotations>
+  <meta><task><size>3</size><original_size><width>100</width><height>50</height></original_size></task></meta>
+  <track id="0" label="drone" source="manual">
+    <box frame="2" outside="0" occluded="0" keyframe="1" xtl="35" ytl="15" xbr="45" ybr="25" />
+  </track>
+  <track id="1" label="drone" source="manual">
+    <box frame="0" outside="0" occluded="0" keyframe="1" xtl="15" ytl="15" xbr="25" ybr="25" />
+    <box frame="1" outside="0" occluded="0" keyframe="1" xtl="25" ytl="15" xbr="35" ybr="25" />
+  </track>
+</annotations>
+""",
+        encoding="utf-8",
+    )
+
+    report = evaluate_files(
+        cvat_xml=gt_path,
+        trajectory_csv=trajectory_path,
+        metadata_json=metadata_path,
+        sample_id="fragmented",
+        track_ids=(0, 1),
+    )
+
+    assert report["target"]["source_track_ids"] == [0, 1]
+    assert report["counts"]["gt_visible_frames"] == 3
+    assert report["counts"]["matched_visible_frames"] == 2
 
 
 def test_dataset_manifest_writes_machine_and_human_reports(tmp_path: Path) -> None:

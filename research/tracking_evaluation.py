@@ -53,6 +53,7 @@ class PredictionObservation:
 @dataclass(frozen=True, slots=True)
 class CvatTrack:
     track_id: int
+    source_track_ids: tuple[int, ...]
     label: str
     source_width: int
     source_height: int
@@ -68,6 +69,7 @@ class VideoGeometry:
     processed_height: int
     fps: float
     frame_count: int
+    num_frames_processed: int
     original_to_processed: np.ndarray
     transform_source: str
 
@@ -86,6 +88,7 @@ def load_cvat_track(
     *,
     fps: float,
     track_id: int | None = None,
+    track_ids: tuple[int, ...] | None = None,
     label: str | None = None,
     include_occluded: bool = True,
 ) -> CvatTrack:
@@ -104,58 +107,80 @@ def load_cvat_track(
         if task_size_node is not None and task_size_node.text
         else None
     )
-    candidates = list(root.findall("./track"))
-    if track_id is not None:
-        candidates = [item for item in candidates if int(item.attrib["id"]) == track_id]
+    if track_id is not None and track_ids is not None:
+        raise TrackingEvaluationError("use either track_id or track_ids, not both")
+    requested_ids = track_ids or ((track_id,) if track_id is not None else None)
+    if requested_ids is not None and len(set(requested_ids)) != len(requested_ids):
+        raise TrackingEvaluationError("track_ids must not contain duplicates")
+
+    all_tracks = list(root.findall("./track"))
+    candidates = all_tracks
+    if requested_ids is not None:
+        requested = set(requested_ids)
+        candidates = [item for item in candidates if int(item.attrib["id"]) in requested]
+        found = {int(item.attrib["id"]) for item in candidates}
+        if found != requested:
+            raise TrackingEvaluationError(
+                f"CVAT tracks not found: {sorted(requested - found)}"
+            )
     if label is not None:
         candidates = [item for item in candidates if item.attrib.get("label") == label]
-    if len(candidates) != 1:
+    allow_merge = requested_ids is not None and len(requested_ids) > 1
+    if not candidates or (len(candidates) != 1 and not allow_merge):
         available = [
             {"track_id": int(item.attrib["id"]), "label": item.attrib.get("label")}
-            for item in root.findall("./track")
+            for item in all_tracks
         ]
         raise TrackingEvaluationError(
-            "CVAT selection must resolve to exactly one track; "
+            "CVAT selection must resolve to one track unless explicit track_ids are given; "
             f"matched={len(candidates)}, available={available}"
         )
+    labels = {str(item.attrib.get("label") or "unknown") for item in candidates}
+    if len(labels) != 1:
+        raise TrackingEvaluationError(
+            f"explicitly merged CVAT tracks must share one label: {sorted(labels)}"
+        )
 
-    track = candidates[0]
     observations: list[GroundTruthObservation] = []
     seen_frames: set[int] = set()
-    for box in track.findall("./box"):
-        if _xml_bool(box.attrib.get("outside", "0")):
-            continue
-        occluded = _xml_bool(box.attrib.get("occluded", "0"))
-        if occluded and not include_occluded:
-            continue
-        frame_index = int(box.attrib["frame"])
-        if frame_index in seen_frames:
-            raise TrackingEvaluationError(f"duplicate CVAT box at frame {frame_index}")
-        seen_frames.add(frame_index)
-        xtl = float(box.attrib["xtl"])
-        ytl = float(box.attrib["ytl"])
-        xbr = float(box.attrib["xbr"])
-        ybr = float(box.attrib["ybr"])
-        if xbr <= xtl or ybr <= ytl:
-            raise TrackingEvaluationError(f"invalid CVAT box at frame {frame_index}")
-        observations.append(
-            GroundTruthObservation(
-                frame_index=frame_index,
-                timestamp_ms=_timestamp_ms(frame_index, fps),
-                cx=(xtl + xbr) / 2.0,
-                cy=(ytl + ybr) / 2.0,
-                width=xbr - xtl,
-                height=ybr - ytl,
-                occluded=occluded,
-                keyframe=_xml_bool(box.attrib.get("keyframe", "0")),
+    for track in candidates:
+        for box in track.findall("./box"):
+            if _xml_bool(box.attrib.get("outside", "0")):
+                continue
+            occluded = _xml_bool(box.attrib.get("occluded", "0"))
+            if occluded and not include_occluded:
+                continue
+            frame_index = int(box.attrib["frame"])
+            if frame_index in seen_frames:
+                raise TrackingEvaluationError(
+                    f"merged CVAT tracks overlap at frame {frame_index}"
+                )
+            seen_frames.add(frame_index)
+            xtl = float(box.attrib["xtl"])
+            ytl = float(box.attrib["ytl"])
+            xbr = float(box.attrib["xbr"])
+            ybr = float(box.attrib["ybr"])
+            if xbr <= xtl or ybr <= ytl:
+                raise TrackingEvaluationError(f"invalid CVAT box at frame {frame_index}")
+            observations.append(
+                GroundTruthObservation(
+                    frame_index=frame_index,
+                    timestamp_ms=_timestamp_ms(frame_index, fps),
+                    cx=(xtl + xbr) / 2.0,
+                    cy=(ytl + ybr) / 2.0,
+                    width=xbr - xtl,
+                    height=ybr - ytl,
+                    occluded=occluded,
+                    keyframe=_xml_bool(box.attrib.get("keyframe", "0")),
+                )
             )
-        )
     observations.sort(key=lambda item: item.frame_index)
     if not observations:
         raise TrackingEvaluationError("selected CVAT track has no evaluable boxes")
     return CvatTrack(
-        track_id=int(track.attrib["id"]),
-        label=str(track.attrib.get("label") or "unknown"),
+        track_id=min(int(track.attrib["id"]) for track in candidates),
+        source_track_ids=tuple(sorted(int(track.attrib["id"]) for track in candidates)),
+        label=next(iter(labels)),
         source_width=source_width,
         source_height=source_height,
         task_frame_count=task_frame_count,
@@ -174,6 +199,11 @@ def load_video_geometry(path: str | Path) -> VideoGeometry:
     frame_count = int(metadata.get("frame_count") or 0)
     if fps <= 0 or frame_count <= 0:
         raise TrackingEvaluationError("metadata fps and frame_count must be positive")
+    num_frames_processed = int(metadata.get("num_frames_processed") or frame_count)
+    if num_frames_processed <= 0 or num_frames_processed > frame_count:
+        raise TrackingEvaluationError(
+            "metadata num_frames_processed must be between 1 and frame_count"
+        )
 
     explicit = metadata.get("original_to_processed")
     if explicit is None and isinstance(metadata.get("coordinate_transform"), dict):
@@ -217,6 +247,7 @@ def load_video_geometry(path: str | Path) -> VideoGeometry:
         processed_height=processed_height,
         fps=fps,
         frame_count=frame_count,
+        num_frames_processed=num_frames_processed,
         original_to_processed=matrix,
         transform_source=transform_source,
     )
@@ -279,6 +310,7 @@ def evaluate_track(
     fps: float,
     sample_id: str,
     prediction_frame_offset: int = 0,
+    attempted_frame_count: int | None = None,
     pixel_thresholds: tuple[float, ...] = (5.0, 10.0, 20.0),
     normalized_thresholds: tuple[float, ...] = (0.25, 0.5, 1.0),
 ) -> dict[str, Any]:
@@ -339,6 +371,21 @@ def evaluate_track(
         if prediction_frames
         else set()
     )
+    attempted_start = prediction_frame_offset
+    attempted_end = (
+        attempted_start + attempted_frame_count - 1
+        if attempted_frame_count is not None
+        else None
+    )
+    attempted_gt_frames = (
+        {
+            frame
+            for frame in gt_frames
+            if attempted_end is not None and attempted_start <= frame <= attempted_end
+        }
+        if attempted_frame_count is not None
+        else set()
+    )
     pixel_success = {
         _threshold_key(value, "px"): _success_metrics(errors_px, value, gt_count)
         for value in pixel_thresholds
@@ -360,7 +407,11 @@ def evaluate_track(
     return {
         "sample_id": sample_id,
         "status": "completed",
-        "target": {"track_id": ground_truth.track_id, "label": ground_truth.label},
+        "target": {
+            "track_id": ground_truth.track_id,
+            "source_track_ids": list(ground_truth.source_track_ids),
+            "label": ground_truth.label,
+        },
         "coordinate_space": "source_video_pixels",
         "alignment": {
             "mode": "frame_index",
@@ -383,12 +434,20 @@ def evaluate_track(
                 if active_span_gt_frames
                 else None
             ),
+            "attempted_window_gt_frames": len(attempted_gt_frames),
+            "attempted_window_observation_ratio": (
+                len(attempted_gt_frames & prediction_frames) / len(attempted_gt_frames)
+                if attempted_gt_frames
+                else None
+            ),
         },
         "timeline": {
             "gt_first_frame": first_gt,
             "gt_last_frame": last_gt,
             "prediction_first_frame": first_prediction,
             "prediction_last_frame": last_prediction,
+            "attempted_first_frame": attempted_start,
+            "attempted_last_frame": attempted_end,
             "late_start_frames": late_start_frames,
             "late_start_ms": round(late_start_frames / fps * 1000.0),
             "early_termination_frames": early_termination_frames,
@@ -414,15 +473,18 @@ def evaluate_files(
     metadata_json: str | Path,
     sample_id: str,
     track_id: int | None = None,
+    track_ids: tuple[int, ...] | None = None,
     label: str | None = None,
     include_occluded: bool = True,
     prediction_frame_offset: int = 0,
+    source_is_trimmed: bool = False,
 ) -> dict[str, Any]:
     geometry = load_video_geometry(metadata_json)
     ground_truth = load_cvat_track(
         cvat_xml,
         fps=geometry.fps,
         track_id=track_id,
+        track_ids=track_ids,
         label=label,
         include_occluded=include_occluded,
     )
@@ -435,14 +497,23 @@ def evaluate_files(
             f"CVAT={ground_truth.source_width}x{ground_truth.source_height}, "
             f"metadata={geometry.source_width}x{geometry.source_height}"
         )
-    if (
-        ground_truth.task_frame_count is not None
-        and ground_truth.task_frame_count != geometry.frame_count
-    ):
-        raise TrackingEvaluationError(
-            "CVAT task frame count does not match tracker metadata: "
-            f"CVAT={ground_truth.task_frame_count}, metadata={geometry.frame_count}"
-        )
+    if ground_truth.task_frame_count is not None:
+        frame_counts_match = ground_truth.task_frame_count == geometry.frame_count
+        if not frame_counts_match and not source_is_trimmed:
+            raise TrackingEvaluationError(
+                "CVAT task frame count does not match tracker metadata. "
+                "Declare source_is_trimmed and an explicit frame offset only when "
+                "the A input is a verified trim of the CVAT source: "
+                f"CVAT={ground_truth.task_frame_count}, metadata={geometry.frame_count}"
+            )
+        mapped_source_end = prediction_frame_offset + geometry.frame_count - 1
+        if source_is_trimmed and (
+            prediction_frame_offset < 0
+            or mapped_source_end >= ground_truth.task_frame_count
+        ):
+            raise TrackingEvaluationError(
+                "trimmed A source falls outside the CVAT task frame range"
+            )
     predictions = load_trajectory(trajectory_csv, geometry=geometry)
     report = evaluate_track(
         ground_truth,
@@ -450,6 +521,7 @@ def evaluate_files(
         fps=geometry.fps,
         sample_id=sample_id,
         prediction_frame_offset=prediction_frame_offset,
+        attempted_frame_count=geometry.num_frames_processed,
     )
     report["inputs"] = {
         "cvat_xml": str(Path(cvat_xml)),
@@ -459,6 +531,7 @@ def evaluate_files(
     report["video"] = {
         "fps": geometry.fps,
         "frame_count": geometry.frame_count,
+        "num_frames_processed": geometry.num_frames_processed,
         "source_width": geometry.source_width,
         "source_height": geometry.source_height,
         "processed_width": geometry.processed_width,
@@ -476,6 +549,9 @@ def evaluate_manifest(path: str | Path) -> dict[str, Any]:
     ground_truth = manifest.get("ground_truth") or {}
     prediction = manifest.get("prediction") or {}
     alignment = manifest.get("alignment") or {}
+    track_ids_value = ground_truth.get("track_ids")
+    if track_ids_value is not None and not isinstance(track_ids_value, list):
+        raise TrackingEvaluationError("ground_truth.track_ids must be a JSON list")
     return evaluate_files(
         cvat_xml=_relative_path(root, ground_truth.get("path"), "ground_truth.path"),
         trajectory_csv=_relative_path(
@@ -490,9 +566,15 @@ def evaluate_manifest(path: str | Path) -> dict[str, Any]:
             if ground_truth.get("track_id") is not None
             else None
         ),
+        track_ids=(
+            tuple(int(value) for value in track_ids_value)
+            if track_ids_value is not None
+            else None
+        ),
         label=ground_truth.get("label"),
         include_occluded=bool(ground_truth.get("include_occluded", True)),
         prediction_frame_offset=int(alignment.get("prediction_frame_offset", 0)),
+        source_is_trimmed=bool(alignment.get("source_is_trimmed", False)),
     )
 
 
@@ -649,13 +731,17 @@ def _summary_row(report: dict[str, Any]) -> dict[str, Any]:
     error = report["localization"]["observed_frame_error_px"]
     normalized = report["localization"]["observed_frame_error_bbox_diagonal"]
     pixel_success = report["localization"]["pixel_threshold_success"]
+    coverage = report["coverage"]
     return {
         "sample_id": report["sample_id"],
         "label": report["target"]["label"],
         "gt_visible_frames": report["counts"]["gt_visible_frames"],
         "matched_visible_frames": report["counts"]["matched_visible_frames"],
-        "full_gt_observation_ratio": report["coverage"]["full_gt_observation_ratio"],
-        "active_span_observation_ratio": report["coverage"]["active_span_observation_ratio"],
+        "full_gt_observation_ratio": coverage["full_gt_observation_ratio"],
+        "active_span_observation_ratio": coverage["active_span_observation_ratio"],
+        "attempted_window_observation_ratio": coverage[
+            "attempted_window_observation_ratio"
+        ],
         "median_error_px": error["median"],
         "p95_error_px": error["p95"],
         "median_error_bbox_diagonal": normalized["median"],
@@ -723,10 +809,11 @@ def _single_command(args: argparse.Namespace) -> None:
         trajectory_csv=args.trajectory,
         metadata_json=args.metadata,
         sample_id=args.sample_id,
-        track_id=args.track_id,
+        track_ids=tuple(args.track_id) if args.track_id else None,
         label=args.label,
         include_occluded=not args.ignore_occluded,
         prediction_frame_offset=args.prediction_frame_offset,
+        source_is_trimmed=args.source_is_trimmed,
     )
     write_json(args.output, report)
     print(f"completed: {report['sample_id']}")
@@ -745,9 +832,15 @@ def main() -> None:
     single.add_argument("--trajectory", type=Path, required=True)
     single.add_argument("--metadata", type=Path, required=True)
     single.add_argument("--sample-id", required=True)
-    single.add_argument("--track-id", type=int)
+    single.add_argument(
+        "--track-id",
+        type=int,
+        action="append",
+        help="CVAT track ID; repeat to merge explicitly selected track fragments",
+    )
     single.add_argument("--label")
     single.add_argument("--prediction-frame-offset", type=int, default=0)
+    single.add_argument("--source-is-trimmed", action="store_true")
     single.add_argument("--ignore-occluded", action="store_true")
     single.add_argument("--output", type=Path, required=True)
     single.set_defaults(run=_single_command)

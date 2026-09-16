@@ -33,7 +33,17 @@ python -m research.tracking_evaluation single \
 ```
 
 Use `--label drone` instead of `--track-id` only when that label identifies one
-track. If multiple tracks share a label, select the numeric CVAT track ID.
+track. If one physical object was accidentally split into non-overlapping CVAT
+tracks, repeat `--track-id` to merge only those explicit fragments:
+
+```bash
+python -m research.tracking_evaluation single \
+  ... \
+  --track-id 0 --track-id 1 --track-id 2
+```
+
+The evaluator rejects overlapping fragments and fragments with different
+labels. It never merges every track with the same label automatically.
 
 ## Dataset layout
 
@@ -69,7 +79,8 @@ Example manifest:
     "metadata": "prediction/metadata.json"
   },
   "alignment": {
-    "prediction_frame_offset": 0
+    "prediction_frame_offset": 0,
+    "source_is_trimmed": false
   }
 }
 ```
@@ -93,6 +104,8 @@ Outputs:
 - `full_gt_observation_ratio`: GT-visible frames with a visible A observation
 - `active_span_observation_ratio`: observations between A's first and last
   visible prediction, separating internal losses from late start/early finish
+- `attempted_window_observation_ratio`: observations within the frame range A
+  actually processed according to `metadata.json.num_frames_processed`
 - observed-frame center error in source pixels: mean, median, p95, maximum
 - center error divided by the GT bbox diagonal
 - success at 5, 10, and 20 source pixels
@@ -104,6 +117,29 @@ Outputs:
 Threshold reports contain both an observed-frame ratio and a full-GT ratio.
 The latter counts missing predictions as failures and is the end-to-end number
 to use when comparing tracker versions.
+
+## Trimmed inputs and partial processing
+
+If A receives the same full source but stops early because of `max_seconds`, do
+not set an offset. `frame_count` remains the full source length and
+`num_frames_processed` defines the attempted evaluation window.
+
+If A receives a verified trimmed copy whose frame zero corresponds to frame 200
+of the CVAT source, declare both facts explicitly:
+
+```json
+{
+  "alignment": {
+    "prediction_frame_offset": 200,
+    "source_is_trimmed": true
+  }
+}
+```
+
+This is valid only when both videos have the same FPS and no frames were
+resampled or removed inside the clip. For variable-rate conversion or edited
+cuts, create separate continuous samples or provide a frame mapping instead of
+using a single offset.
 
 ## Input validation
 
