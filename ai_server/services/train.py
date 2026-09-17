@@ -10,18 +10,24 @@ from sklearn.ensemble import RandomForestClassifier
 
 # 학습에 사용하는 피처 목록. 이 저장소의 단일 진실 공급원(single source of truth)으로,
 # evaluate.py와 classifier.py가 이 목록을 참조한다.
+#
+# feature v4(research/FEATURES_V4.md) 9종. bbox 기반 피처를 전부 제거하고
+# post-CMC 중심점과 관측 시각만으로 계산한다. 직전 11종 구성에서는
+# bbox_scale_rate_std 하나가 중요도의 43.5%를 차지했는데, 이 채널에 검출기
+# 지터를 주입하자 드론 리콜이 0.93에서 0.56으로 무너졌다. 근거는
+# docs/rf_evaluation.md 의 「알려진 취약점」 절에 기록했다.
+#
+# 순서는 research.features.FEATURE_COLUMNS 와 일치시킨다.
 FEATURE_NAMES = [
-    "v_mean",
-    "v_std",
-    "a_mean",
-    "turn_rate_mean",
+    "speed_median",
+    "speed_cv",
+    "acceleration_median",
+    "acceleration_p95",
+    "turn_rate_median",
     "turn_rate_p95",
+    "curvature_cv",
+    "tortuosity",
     "heading_change_ratio",
-    "straightness",
-    "stationary_ratio",
-    "bbox_area_mean",
-    "bbox_area_cv",
-    "bbox_scale_rate_std",
 ]
 
 # 데이터 버전을 추적하기 위해 모델 번들에 함께 저장하는 컬럼.
