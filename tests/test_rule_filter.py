@@ -8,20 +8,26 @@ from ai_server.services.rule_filter import RuleFilter
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_features(
-    v_mean: float = 10.0,
-    v_std: float = 1.0,
-    a_mean: float = 0.5,
-    heading_change_ratio: float = 0.2,
-    maneuverability_sigma: float = 5.0,
-) -> TrackFeatures:
-    return TrackFeatures(
-        v_mean=v_mean,
-        v_std=v_std,
-        a_mean=a_mean,
-        heading_change_ratio=heading_change_ratio,
-        maneuverability_sigma=maneuverability_sigma,
-    )
+# feature v4 9종의 정상 범위 기본값. 시뮬레이터 4.0.0 표본의 중앙값을 사용한다.
+# 개별 테스트는 검사하려는 필드만 키워드로 덮어쓴다. 피처가 늘거나 줄어도
+# 이 사전 한 곳만 고치면 되도록 **overrides 형태로 받는다.
+_DEFAULT_FEATURES: dict[str, float] = {
+    "speed_median": 74.67,
+    "speed_cv": 0.21,
+    "acceleration_median": 27.89,
+    "acceleration_p95": 76.84,
+    "turn_rate_median": 0.25,
+    "turn_rate_p95": 0.94,
+    "curvature_cv": 0.93,
+    "tortuosity": 1.01,
+    "heading_change_ratio": 0.19,
+}
+
+
+def _make_features(**overrides: float) -> TrackFeatures:
+    unknown = set(overrides) - set(_DEFAULT_FEATURES)
+    assert not unknown, f"알 수 없는 피처 이름: {sorted(unknown)}"
+    return TrackFeatures(**{**_DEFAULT_FEATURES, **overrides})
 
 
 def _make_quality(
@@ -48,18 +54,10 @@ def _make_fv(
     num_points: int = 10,
     mean_conf: float = 0.85,
     missing_ratio: float = 0.05,
-    v_mean: float = 10.0,
-    v_std: float = 1.0,
-    a_mean: float = 0.5,
-    heading_change_ratio: float = 0.2,
-    maneuverability_sigma: float = 5.0,
     include_quality: bool = True,
+    **feature_overrides: float,
 ) -> FeatureVector:
-    features = (
-        None
-        if feature_status == "failed"
-        else _make_features(v_mean, v_std, a_mean, heading_change_ratio, maneuverability_sigma)
-    )
+    features = None if feature_status == "failed" else _make_features(**feature_overrides)
     quality = _make_quality(num_points, mean_conf, missing_ratio) if include_quality else None
     return FeatureVector(
         track_id=1,
@@ -85,7 +83,7 @@ class TestPass:
             features=_make_features(),
             quality=_make_quality(),
             feature_status="partial",
-            imputed_fields=["v_std"],
+            imputed_fields=["speed_cv"],
         )
         result = RuleFilter().apply(fv)
         assert result.passed is True
@@ -181,32 +179,44 @@ class TestHighNoiseMissingRatio:
 # ---------------------------------------------------------------------------
 
 class TestHighNoiseFeatures:
-    def test_high_velocity_cv_is_rejected(self):
-        # v_std / v_mean = 35.0 / 10.0 = 3.5  > default 3.0
-        result = RuleFilter().apply(_make_fv(v_mean=10.0, v_std=35.0))
+    def test_high_speed_cv_is_rejected(self):
+        # 기본 임계값 2.0 초과
+        result = RuleFilter().apply(_make_fv(speed_cv=2.1))
         assert result.passed is False
         assert result.reject_reason == "high_noise"
 
-    def test_velocity_cv_at_threshold_passes(self):
-        # v_std / v_mean = 30.0 / 10.0 = 3.0  == default 3.0 (not strictly greater)
-        result = RuleFilter().apply(_make_fv(v_mean=10.0, v_std=30.0))
+    def test_speed_cv_at_threshold_passes(self):
+        # 경계값은 통과한다 (strictly greater 비교)
+        result = RuleFilter().apply(_make_fv(speed_cv=2.0))
         assert result.passed is True
 
-    def test_zero_v_mean_skips_cv_check(self):
-        result = RuleFilter().apply(_make_fv(v_mean=0.0, v_std=100.0))
+    def test_observed_maximum_speed_cv_passes(self):
+        # 시뮬레이터 4.0.0 표본의 speed_cv 최댓값 1.187. 정상 궤적은 걸러지면 안 된다.
+        result = RuleFilter().apply(_make_fv(speed_cv=1.187))
         assert result.passed is True
 
-    def test_high_maneuverability_sigma_is_rejected(self):
-        result = RuleFilter().apply(_make_fv(maneuverability_sigma=31.0))
+    def test_custom_max_speed_cv(self):
+        result = RuleFilter(max_speed_cv=0.5).apply(_make_fv(speed_cv=0.6))
         assert result.passed is False
         assert result.reject_reason == "high_noise"
 
-    def test_maneuverability_sigma_at_threshold_passes(self):
-        result = RuleFilter().apply(_make_fv(maneuverability_sigma=30.0))
+    def test_high_turn_rate_p95_is_rejected(self):
+        # 기본 임계값 20.0 rad/s 초과. 추적 실패나 ID 교체를 시사한다.
+        result = RuleFilter().apply(_make_fv(turn_rate_p95=20.1))
+        assert result.passed is False
+        assert result.reject_reason == "high_noise"
+
+    def test_turn_rate_p95_at_threshold_passes(self):
+        result = RuleFilter().apply(_make_fv(turn_rate_p95=20.0))
         assert result.passed is True
 
-    def test_custom_max_maneuverability_sigma(self):
-        result = RuleFilter(max_maneuverability_sigma=10.0).apply(_make_fv(maneuverability_sigma=11.0))
+    def test_observed_maximum_turn_rate_p95_passes(self):
+        # 시뮬레이터 4.0.0 표본의 turn_rate_p95 최댓값 11.010.
+        result = RuleFilter().apply(_make_fv(turn_rate_p95=11.010))
+        assert result.passed is True
+
+    def test_custom_max_turn_rate_p95(self):
+        result = RuleFilter(max_turn_rate_p95=10.0).apply(_make_fv(turn_rate_p95=11.0))
         assert result.passed is False
         assert result.reject_reason == "high_noise"
 
