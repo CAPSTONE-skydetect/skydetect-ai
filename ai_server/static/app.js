@@ -42,6 +42,40 @@ const downloadTrack = $("#downloadTrack");
 const downloadTrajectory = $("#downloadTrajectory");
 const downloadMetrics = $("#downloadMetrics");
 const downloadOverlay = $("#downloadOverlay");
+const verdictCard = $("#verdictCard");
+const verdictLabel = $("#verdictLabel");
+const verdictConfidence = $("#verdictConfidence");
+const verdictReason = $("#verdictReason");
+const verdictFeatures = $("#verdictFeatures");
+
+// 모델 라벨을 화면 표기로 옮긴다. 판정 불가는 "모름"이 아니라 왜 못 냈는지가
+// 중요하므로, 사유를 항상 함께 보여준다(renderVerdict 참고).
+const VERDICT_TEXT = {
+  drone: "드론",
+  bird: "새",
+  uncertain: "판정 불가",
+};
+
+// 피처 계산이 거부된 이유. research.features가 내는 영문 사유를 그대로 노출하면
+// 사용자가 다음에 뭘 해야 할지 알 수 없어서 행동으로 옮길 수 있는 문장으로 바꾼다.
+const REASON_TEXT = {
+  insufficient_points: "관측된 점이 너무 적습니다. 더 긴 구간을 추적해 주세요.",
+  insufficient_duration: "추적 구간이 너무 짧습니다.",
+  excessive_missing_fraction: "추적이 끊긴 구간이 너무 많습니다.",
+  no_usable_contiguous_segment: "연속으로 이어진 구간이 없습니다.",
+  partial_timestamps: "일부 프레임에 타임스탬프가 없습니다.",
+  nonfinite_features: "피처 계산 결과가 유효하지 않습니다.",
+  nonfinite_input: "추적 좌표에 유효하지 않은 값이 있습니다.",
+};
+
+// C파트 RuleFilter 탈락 코드(schemas.RejectReason). 오늘 실측에서 high_noise가
+// 결측률 63% 트랙에 떴는데 화면엔 사유가 안 나와 로그를 파야 했다.
+const REJECT_TEXT = {
+  short_track: "추적된 프레임이 너무 적습니다. 더 긴 구간을 지정해 주세요.",
+  feature_error: "피처 계산에 실패했습니다.",
+  high_noise: "추적이 불안정합니다 (결측·지터 과다). 대비가 뚜렷한 구간을 다시 지정해 주세요.",
+  low_confidence: "관측 신뢰도가 낮습니다. ROI를 대상에 더 정확히 맞춰 주세요.",
+};
 
 let preparedVideo = null;
 let selectedBox = null;
@@ -305,6 +339,8 @@ function renderResult(data) {
     metrics.method || "manual_roi",
   ].join(" · ");
 
+  renderVerdict(data.prediction, data.features);
+
   renderMetrics([
     ["observed", quality.num_points],
     ["mean conf", formatNumber(quality.mean_conf)],
@@ -341,8 +377,75 @@ function renderResult(data) {
   resultSection.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+function renderVerdict(prediction, features) {
+  if (!prediction) {
+    verdictCard.classList.add("hidden");
+    return;
+  }
+
+  const label = prediction.label || "uncertain";
+  verdictCard.classList.remove("hidden");
+  verdictCard.dataset.verdict = label;
+  verdictLabel.textContent = VERDICT_TEXT[label] || label;
+  verdictConfidence.textContent =
+    label === "uncertain" ? "" : `신뢰도 ${formatPercent(prediction.confidence)}`;
+  verdictReason.textContent = describeVerdict(prediction, features);
+
+  // 근거는 판정이 실제로 나왔을 때만 뜻이 있다. 탈락한 트랙의 피처 값을 보여주면
+  // 모델이 그 값을 보고 판단한 것처럼 읽힌다.
+  const values = label === "uncertain" ? null : features?.values;
+  verdictFeatures.replaceChildren();
+  if (!values) {
+    verdictFeatures.classList.add("hidden");
+    return;
+  }
+
+  verdictFeatures.classList.remove("hidden");
+  const ranked = Object.entries(prediction.top_features || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([name]) => name);
+  const shown = ranked.length ? ranked : Object.keys(values).slice(0, 4);
+  renderMetricsInto(
+    verdictFeatures,
+    shown.map((name) => [name, formatNumber(values[name])]),
+  );
+}
+
+function describeVerdict(prediction, features) {
+  if (prediction.label !== "uncertain") {
+    return `피처 ${features?.version || "-"} 기준 · ${prediction.processing_time_ms}ms`;
+  }
+
+  // 판정 불가의 원인은 두 층에 있다. 피처를 아예 못 뽑았거나(B), 뽑았지만 품질
+  // 규칙에서 걸렸거나(C). 사용자에게는 구분이 보여야 조치가 가능하다.
+  const featureReasons = (features?.reasons || []).map(
+    (reason) => REASON_TEXT[reason] || reason,
+  );
+  if (featureReasons.length) {
+    return `피처를 계산하지 못했습니다 — ${featureReasons.join(" / ")}`;
+  }
+
+  const rejectCode = prediction.rule_filter?.reject_reason;
+  if (rejectCode) {
+    return `품질 기준 미달 — ${REJECT_TEXT[rejectCode] || rejectCode}`;
+  }
+
+  // 필터는 통과했는데 모델 확신이 임계값에 못 미친 경우. 오늘 새 영상이
+  // bird 0.46 / drone 0.54로 갈렸는데 화면엔 아무 설명이 없었다.
+  const confidence = prediction.confidence;
+  if (confidence > 0) {
+    return `모델 확신도 ${formatPercent(confidence)} — 임계값 미달로 판정을 보류했습니다.`;
+  }
+  return "판정을 내리기에 근거가 부족합니다.";
+}
+
 function renderMetrics(items) {
-  resultMetrics.replaceChildren(
+  renderMetricsInto(resultMetrics, items);
+}
+
+function renderMetricsInto(target, items) {
+  target.replaceChildren(
     ...items.map(([label, value]) => {
       const item = document.createElement("div");
       const term = document.createElement("dt");
@@ -581,6 +684,9 @@ function clearResult() {
   debugPanel.textContent = "";
   resultSummary.textContent = "";
   resultMetrics.replaceChildren();
+  verdictCard.classList.add("hidden");
+  verdictCard.removeAttribute("data-verdict");
+  verdictFeatures.replaceChildren();
   [downloadTrack, downloadTrajectory, downloadMetrics, downloadOverlay].forEach(
     (link) => setLink(link, null),
   );

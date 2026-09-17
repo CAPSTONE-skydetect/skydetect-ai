@@ -585,3 +585,92 @@ video {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ── 최종 판정 (C파트 출력) ───────────────────────────────── */
+
+.verdict {
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--muted);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 16px 18px;
+}
+
+/* 판정별 색. 드론은 경계 신호라 accent, 새는 정상 판정이라 green,
+   판정 불가는 결과가 아니라 상태이므로 채도를 뺀다. */
+.verdict[data-verdict="drone"] {
+  border-left-color: var(--accent);
+  background: #fdf1ed;
+}
+
+.verdict[data-verdict="bird"] {
+  border-left-color: var(--green);
+  background: var(--green-soft);
+}
+
+.verdict[data-verdict="uncertain"] {
+  border-left-color: var(--focus);
+  background: #fdf7e8;
+}
+
+.verdict-main {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.verdict-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.verdict-value {
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.verdict[data-verdict="drone"] .verdict-value {
+  color: var(--accent-dark);
+}
+
+.verdict[data-verdict="bird"] .verdict-value {
+  color: var(--green);
+}
+
+.verdict-confidence {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.verdict-reason {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.verdict-features {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.verdict-features dd {
+  font-size: 16px;
+}
+
+.verdict-features.hidden {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .verdict-features {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

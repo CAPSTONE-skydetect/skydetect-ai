@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SkyDetect Manual ROI Tracker</title>
-    <link rel="stylesheet" href="/static/styles.css?v=manual-roi-1" />
+    <link rel="stylesheet" href="/static/styles.css?v=pipeline-1" />
   </head>
   <body>
     <main class="shell">
@@ -162,6 +162,16 @@
           </div>
         </div>
 
+        <div id="verdictCard" class="verdict hidden">
+          <div class="verdict-main">
+            <span class="verdict-label">판정</span>
+            <strong id="verdictLabel" class="verdict-value">-</strong>
+            <span id="verdictConfidence" class="verdict-confidence"></span>
+          </div>
+          <p id="verdictReason" class="verdict-reason"></p>
+          <dl id="verdictFeatures" class="metric-grid verdict-features"></dl>
+        </div>
+
         <dl id="resultMetrics" class="metric-grid"></dl>
 
         <div id="overlayArea" class="result-detail hidden">
@@ -170,6 +180,6 @@
         </div>
       </section>
     </main>
-    <script src="/static/app.js?v=manual-roi-1"></script>
+    <script src="/static/app.js?v=pipeline-2"></script>
   </body>
 </html>
