@@ -18,6 +18,9 @@ research/plots/
 research/output/
 .ipynb_checkpoints/
 
+# Model evaluation reports (generated)
+reports/
+
 # Runtime tracking artifacts
 artifacts/manual_tracks/
 storage/uploads/

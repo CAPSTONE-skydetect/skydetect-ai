@@ -5,8 +5,25 @@ from ai_server.schemas import FeatureVector, RuleFilterResult
 _MIN_TRACK_LENGTH: int = 5
 _MIN_MEAN_CONF: float = 0.4
 _MAX_MISSING_RATIO: float = 0.5
-_MAX_VELOCITY_CV: float = 3.0       # v_std / v_mean
-_MAX_MANEUVERABILITY_SIGMA: float = 30.0
+
+# feature v4 기준 노이즈 임계값.
+#
+# 이 필터의 목적은 클래스를 가르는 것이 아니라, 추적이 실패했거나 ID가 뒤바뀐
+# 병리적 트랙을 RF 진입 전에 거르는 것이다. 따라서 정상 궤적 분포의 최댓값
+# 위쪽에 여유를 두고 잡는다.
+#
+# 근거: 시뮬레이터 4.0.0 / 피처 4.0.0 표본 100건(ideal 49, noisy 51)의 분포.
+#   speed_cv      p99 0.805, max 1.187  -> 2.0 (최댓값의 약 1.7배)
+#   turn_rate_p95 p99 8.404, max 11.010 -> 20.0 (rad/s. 초당 3회전 이상은 비물리적)
+#
+# 주의: 표본 100건은 임계값을 확정하기에 작다. 전체 학습 데이터셋이 피처 4.0.0으로
+# 재생성되면 같은 분위수 기준으로 재산정해야 한다.
+#
+# speed_cv 는 기존 v_std / v_mean 규칙을 그대로 대체한다. 정의가 같아 별도
+# 0 나눗셈 방어가 필요 없다. 다만 기존 임계값 3.0은 v4 분포에서 한 번도
+# 발동하지 않으므로(최댓값 1.187) 그대로 쓸 수 없다.
+_MAX_SPEED_CV: float = 2.0
+_MAX_TURN_RATE_P95: float = 20.0
 
 
 class RuleFilter:
@@ -17,14 +34,14 @@ class RuleFilter:
         min_track_length: int = _MIN_TRACK_LENGTH,
         min_mean_conf: float = _MIN_MEAN_CONF,
         max_missing_ratio: float = _MAX_MISSING_RATIO,
-        max_velocity_cv: float = _MAX_VELOCITY_CV,
-        max_maneuverability_sigma: float = _MAX_MANEUVERABILITY_SIGMA,
+        max_speed_cv: float = _MAX_SPEED_CV,
+        max_turn_rate_p95: float = _MAX_TURN_RATE_P95,
     ) -> None:
         self.min_track_length = min_track_length
         self.min_mean_conf = min_mean_conf
         self.max_missing_ratio = max_missing_ratio
-        self.max_velocity_cv = max_velocity_cv
-        self.max_maneuverability_sigma = max_maneuverability_sigma
+        self.max_speed_cv = max_speed_cv
+        self.max_turn_rate_p95 = max_turn_rate_p95
 
     def apply(
         self,
@@ -65,8 +82,8 @@ class RuleFilter:
         return RuleFilterResult(passed=True)
 
     def _features_are_noisy(self, features) -> bool:
-        if features.v_mean > 1e-6 and (features.v_std / features.v_mean) > self.max_velocity_cv:
+        if features.speed_cv > self.max_speed_cv:
             return True
-        if features.maneuverability_sigma > self.max_maneuverability_sigma:
+        if features.turn_rate_p95 > self.max_turn_rate_p95:
             return True
         return False

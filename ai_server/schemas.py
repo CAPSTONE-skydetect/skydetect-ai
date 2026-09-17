@@ -198,64 +198,59 @@ class TrackFeatures(StrictModel):
     B가 계산한 feature 묶음을 담는 모델.
 
     한 줄 설명:
-        RF 분류 전 단계에서 사용하는 trajectory/bbox 기반 feature 벡터.
+        RF 분류 전 단계에서 사용하는, bbox에 의존하지 않는 궤적 기반 feature 벡터.
 
     왜 이렇게 했는가:
-        - Core feature는 MVP 단계에서 항상 계산 가능해야 하므로 required로 둔다.
-        - 연구/확장 단계 feature는 아직 미구현일 수 있으므로 Optional로 둔다.
-        - 이렇게 하면 B 개발 현실을 반영하면서도 shared schema를 유지할 수 있다.
+        - feature v4(research/FEATURES_V4.md) 9종을 그대로 반영한다.
+        - bbox 기반 feature를 쓰지 않는다. A의 bbox가 객체 외곽 크기를 안정적으로
+          나타낸다는 가정을 제거했기 때문이다. 모든 값은 post-CMC 중심점과
+          실제 관측 시각만으로 계산한다.
+        - 9종 모두 required로 둔다. research/features.py가 계산 실패 시 일부 값을
+          None으로 채우지 않고 샘플 전체를 rejected 처리하므로, 부분 계산 상태를
+          표현할 필요가 없다. 계산이 불완전하면 feature_status로 알린다.
 
     주의:
-        Optional feature가 None일 수 있으므로,
-        C에서 RF 입력 전에 densify(기본값/학습 평균값 대체)를 해야 할 수 있다.
+        speed/acceleration은 pixel/s, pixel/s^2 단위의 apparent image-plane motion이다.
+        실제 물리 속도나 거리 보정 속도가 아니므로 대상까지의 거리에 영향을 받는다.
 
     필드:
-        [Core / required]
-            v_mean: 평균 속도
-            v_std: 속도 표준편차
-            a_mean: 평균 가속도
-            heading_change_ratio: 방향 전환 비율
-            maneuverability_sigma: 기동성 지표 σ
-
-        [Optional / staged rollout]
-            curvature_mean: 평균 곡률
-            curvature_cv: 곡률 변동계수
-            turning_angle_mean: 평균 전환각
-            bbox_area_mean: bbox 면적 평균
-            bbox_area_std: bbox 면적 표준편차
-            glcm_corr: 텍스처 상관관계
+        speed_median: 속력의 시간 가중 중앙값 (pixel/s)
+        speed_cv: std(speed) / mean(speed). 배율 불변인 속도 변동성
+        acceleration_median: 속력 변화율의 시간 가중 중앙값 (pixel/s^2)
+        acceleration_p95: 가속도 95백분위수. 드문 급가속의 크기
+        turn_rate_median: heading 변화율의 중앙값 (rad/s)
+        turn_rate_p95: turn rate 95백분위수. 드문 급회전의 크기
+        curvature_cv: 이동 거리당 굴곡(kappa)의 변동계수
+        tortuosity: 전체 이동거리 / 시작-끝 직선거리. 1.0이 완전 직선
+        heading_change_ratio: 유효 turn rate가 임계값을 넘는 시간 비율
     """
 
     # -------------------------------------------------------------------------
-    # [필수: Core Features] 즉시 계산 및 MVP 분류의 기초
+    # feature v4 9종. 순서는 research.features.FEATURE_COLUMNS와 일치시킨다.
     # -------------------------------------------------------------------------
-    v_mean: float = Field(..., description="평균 속도")
-    v_std: float = Field(..., ge=0.0, description="속도 표준편차")
-    a_mean: float = Field(..., description="평균 가속도")
+    speed_median: float = Field(..., ge=0.0, description="속력 중앙값 (pixel/s)")
+    speed_cv: float = Field(..., ge=0.0, description="속도 변동계수")
+    acceleration_median: float = Field(..., ge=0.0, description="가속도 중앙값 (pixel/s^2)")
+    acceleration_p95: float = Field(..., ge=0.0, description="가속도 95백분위수")
+    turn_rate_median: float = Field(..., ge=0.0, description="turn rate 중앙값 (rad/s)")
+    turn_rate_p95: float = Field(..., ge=0.0, description="turn rate 95백분위수")
+    curvature_cv: float = Field(..., ge=0.0, description="곡률 변동계수")
+    tortuosity: float = Field(..., ge=1.0, description="경로 우회 정도 (1.0 = 직선)")
     heading_change_ratio: float = Field(..., ge=0.0, le=1.0, description="방향 전환 비율")
-    maneuverability_sigma: float = Field(..., ge=0.0, description="기동성 지표 σ")
-
-    # -------------------------------------------------------------------------
-    # [선택: Optional / Staged Rollout Features]
-    # 현재 단계에서는 None 허용
-    # -------------------------------------------------------------------------
-    curvature_mean: float | None = Field(default=None, ge=0.0, description="평균 곡률")
-    curvature_cv: float | None = Field(default=None, ge=0.0, description="곡률 변동계수")
-    turning_angle_mean: float | None = Field(default=None, description="평균 전환각")
-    bbox_area_mean: float | None = Field(default=None, ge=0.0, description="BBox 면적 평균")
-    bbox_area_std: float | None = Field(default=None, ge=0.0, description="BBox 면적 표준편차")
-    glcm_corr: float | None = Field(default=None, description="GLCM 텍스처 상관관계")
 
     model_config = ConfigDict(
         extra="forbid",
         json_schema_extra={
             "example": {
-                "v_mean": 18.5,
-                "v_std": 0.22,
-                "a_mean": 0.08,
-                "heading_change_ratio": 0.14,
-                "maneuverability_sigma": 5.82,
-                "curvature_mean": 0.07,
+                "speed_median": 74.67,
+                "speed_cv": 0.21,
+                "acceleration_median": 27.89,
+                "acceleration_p95": 76.84,
+                "turn_rate_median": 0.25,
+                "turn_rate_p95": 0.94,
+                "curvature_cv": 0.93,
+                "tortuosity": 1.01,
+                "heading_change_ratio": 0.19,
             }
         },
     )
@@ -361,11 +356,15 @@ class ClassifyRequest(StrictModel):
                     "track_id": 1,
                     "feature_status": "ok",
                     "features": {
-                        "v_mean": 18.5,
-                        "v_std": 0.22,
-                        "a_mean": 0.08,
-                        "heading_change_ratio": 0.14,
-                        "maneuverability_sigma": 5.82,
+                        "speed_median": 74.67,
+                        "speed_cv": 0.21,
+                        "acceleration_median": 27.89,
+                        "acceleration_p95": 76.84,
+                        "turn_rate_median": 0.25,
+                        "turn_rate_p95": 0.94,
+                        "curvature_cv": 0.93,
+                        "tortuosity": 1.01,
+                        "heading_change_ratio": 0.19,
                     },
                     "quality": {
                         "num_points": 10,
