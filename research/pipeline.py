@@ -11,6 +11,11 @@ import pandas as pd
 from . import FEATURE_VERSION, SIMULATOR_VERSION
 from .camera import Camera
 from .behavior import BehaviorSchedule
+from .feature_contract import (
+    feature_contract_descriptor,
+    feature_contract_id,
+    feature_observation_metadata,
+)
 from .features import FEATURE_COLUMNS, FeatureConfig, extract_features
 from .generators import BirdDyn, DroneDyn, Environment, SPECIES_CONFIG
 from .io import read_jsonl, write_json, write_jsonl
@@ -54,6 +59,14 @@ class BatchRunner:
         self.feature_config = feature_config or FeatureConfig()
         self.noise_config = noise_config or NoiseConfig()
         self.provenance = parameter_manifest()
+        self.feature_contract = feature_contract_descriptor(
+            self.feature_config.fingerprint,
+            target_fps=self.feature_config.target_fps,
+        )
+        self.feature_contract["feature_contract_id"] = feature_contract_id(
+            self.feature_config.fingerprint,
+            target_fps=self.feature_config.target_fps,
+        )
 
     def simulate(self, scenario, agent_type, subtype, sample_index, noisy=True,
                  frame_count=None, behavior=None, depth_mode=None):
@@ -186,6 +199,14 @@ class BatchRunner:
             for state in observation_meta["states"][len(latent):]:
                 state["reason"] = failure
         feature_result = extract_features(observations, camera.width, camera.height, self.fps, self.feature_config)
+        feature_result["quality"].update(
+            feature_observation_metadata(
+                camera.width,
+                camera.height,
+                feature_config_id=self.feature_config.fingerprint,
+                target_fps=self.feature_config.target_fps,
+            )
+        )
         if failure:
             feature_result.update(feature_status="rejected", features=None)
             feature_result["reasons"].append(failure)
@@ -195,8 +216,12 @@ class BatchRunner:
                         observation_profile="noisy" if noisy else "ideal", fps=self.fps, frame_count=n,
                         start_position_m=start.tolist(), initial_goal_m=initial_goal.tolist(),
                         commanded_goal_m=goal.tolist(), minimum_goal_distance_m=150.,
-                        simulator_version=SIMULATOR_VERSION, feature_version=FEATURE_VERSION,
-                        seed=self.seed, scenario_seed=scenario_seed, physics_seed=physical_seed,
+                         simulator_version=SIMULATOR_VERSION, feature_version=FEATURE_VERSION,
+                         feature_config_id=self.feature_config.fingerprint,
+                         feature_contract_id=self.feature_contract["feature_contract_id"],
+                         coordinate_policy=self.feature_contract["coordinate_policy"],
+                         timebase_policy=self.feature_contract["timebase_policy"],
+                         seed=self.seed, scenario_seed=scenario_seed, physics_seed=physical_seed,
                         observation_seed=observer_seed, camera=camera.to_dict(),
                         coordinate_space="post_cmc_residual_observation",
                         individual_parameters=dict(cruise_speed_m_s=agent.s_star, width_m=agent.real_width,
@@ -239,13 +264,14 @@ class BatchRunner:
                                 meta, feature = sample["metadata"], sample["feature_result"]
                                 meta["split"] = splits[meta["family_id"]]
                                 row = {k: meta[k] for k in ("sample_id", "family_id", "label", "subtype", "scenario",
-                                                           "behavior_mode", "observation_profile", "split", "frame_count",
-                                                           "simulator_version", "feature_version", "requested_depth_mode", "fps", "seed")}
+                                                            "behavior_mode", "observation_profile", "split", "frame_count",
+                                                            "simulator_version", "feature_version", "feature_config_id",
+                                                            "feature_contract_id", "coordinate_policy", "timebase_policy",
+                                                            "requested_depth_mode", "fps", "seed")}
                                 row.update(attempted_missing_fraction=meta["observation"]["quality"]["missing_ratio"],
                                            camera_residual_enabled=meta["observation"]["camera_motion"]["enabled"],
                                            tracking_drift_enabled=meta["observation"]["tracking_drift"]["enabled"])
                                 row.update(feature_status=feature["feature_status"],
-                                           feature_config_id=feature["feature_config_id"],
                                            rejection_reason=";".join(feature["reasons"]),
                                            **{k: (feature["features"] or {}).get(k) for k in FEATURE_COLUMNS},
                                            **feature["quality"])
@@ -255,8 +281,9 @@ class BatchRunner:
         table = pd.DataFrame(rows)
         table.to_csv(self.output_dir / "simulation_features_v4.csv", index=False)
         manifest = dict(simulator_version=SIMULATOR_VERSION, feature_version=FEATURE_VERSION,
-                        seed=self.seed, fps=self.fps, feature_config=asdict(self.feature_config),
-                        feature_config_id=self.feature_config.fingerprint, noise_config=asdict(self.noise_config),
+                         seed=self.seed, fps=self.fps, feature_config=asdict(self.feature_config),
+                         feature_config_id=self.feature_config.fingerprint, noise_config=asdict(self.noise_config),
+                         feature_contract=self.feature_contract,
                         samples_per_subtype=samples_per_subtype, paired=paired, scenarios=list(scenarios),
                         rows=len(table), accepted=int((table.feature_status == "accepted").sum()),
                         family_splits=splits, calibration_status="uncalibrated_no_real_A",

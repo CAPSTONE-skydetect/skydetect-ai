@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ai_server.schemas import (
+    FeatureProvenance,
     FeatureStatus,
     FeatureVector,
     TrackFeatures,
@@ -22,12 +23,14 @@ from ai_server.schemas import (
     TrackSequence,
 )
 from ai_server.utils.quality import build_track_quality
+from research.feature_contract import (
+    COORDINATE_POLICY,
+    canonical_dimensions,
+    feature_observation_metadata,
+)
 from research.features import FeatureConfig, extract_features
 
-CANONICAL_COORDINATE_POLICY = "fhd_width_1920_v1"
-CANONICAL_WIDTH_PX = 1920.0
-TRAINING_ASPECT_RATIO = 16.0 / 9.0
-TIMEBASE_POLICY = "timestamp_ms_priority_30hz_resample_v1"
+CANONICAL_COORDINATE_POLICY = COORDINATE_POLICY
 
 # research 쪽 상태값과 스키마 쪽 FeatureStatus 는 어휘가 다르다.
 # research 는 "표본을 학습에 채택할 것인가"를, 스키마는 "피처가 쓸 수 있는가"를
@@ -50,6 +53,7 @@ class FeatureExtractionResult:
     feature_vector: FeatureVector
     feature_version: str
     feature_config_id: str
+    feature_contract_id: str
     coordinate_policy: str
     timebase_policy: str
     coordinate_scale: float
@@ -95,11 +99,19 @@ def build_feature_vector(
         for point in track.history
     ]
 
-    canonical_width, canonical_height, coordinate_scale = _canonical_dimensions(
+    canonical_width, canonical_height, coordinate_scale = canonical_dimensions(
         track.processed_width,
         track.processed_height,
     )
     effective_config = config or FeatureConfig()
+    policy_metadata = feature_observation_metadata(
+        track.processed_width,
+        track.processed_height,
+        feature_config_id=effective_config.fingerprint,
+        target_fps=effective_config.target_fps,
+    )
+    effective_timebase_policy = policy_metadata["timebase_policy"]
+    contract_id = policy_metadata["feature_contract_id"]
     result = extract_features(
         history,
         image_width=canonical_width,
@@ -107,23 +119,7 @@ def build_feature_vector(
         fps=fps,
         config=effective_config,
     )
-    result["quality"].update(
-        {
-            "coordinate_policy": CANONICAL_COORDINATE_POLICY,
-            "timebase_policy": TIMEBASE_POLICY,
-            "target_feature_fps": effective_config.target_fps,
-            "coordinate_scale": coordinate_scale,
-            "source_processed_width": track.processed_width,
-            "source_processed_height": track.processed_height,
-            "canonical_width": canonical_width,
-            "canonical_height": canonical_height,
-            "training_aspect_ratio": TRAINING_ASPECT_RATIO,
-            "aspect_ratio_matches_training": _matches_training_aspect_ratio(
-                track.processed_width,
-                track.processed_height,
-            ),
-        }
-    )
+    result["quality"].update(policy_metadata)
 
     status = _STATUS_MAP.get(result["feature_status"], "failed")
     features = (
@@ -138,35 +134,34 @@ def build_feature_vector(
             features=features,
             quality=_resolve_quality(track, result["quality"]),
             feature_status=status,
+            provenance=FeatureProvenance(
+                feature_version=result["feature_version"],
+                feature_config_id=result["feature_config_id"],
+                feature_contract_id=contract_id,
+                coordinate_policy=CANONICAL_COORDINATE_POLICY,
+                timebase_policy=effective_timebase_policy,
+                target_feature_fps=effective_config.target_fps,
+                source_processed_width=track.processed_width,
+                source_processed_height=track.processed_height,
+                coordinate_scale=coordinate_scale,
+                canonical_width=canonical_width,
+                canonical_height=canonical_height,
+                aspect_ratio_matches_training=policy_metadata[
+                    "aspect_ratio_matches_training"
+                ],
+            ),
         ),
         feature_version=result["feature_version"],
         feature_config_id=result["feature_config_id"],
+        feature_contract_id=contract_id,
         coordinate_policy=CANONICAL_COORDINATE_POLICY,
-        timebase_policy=TIMEBASE_POLICY,
+        timebase_policy=effective_timebase_policy,
         coordinate_scale=coordinate_scale,
         canonical_width=canonical_width,
         canonical_height=canonical_height,
         reasons=list(result["reasons"]),
         raw_quality=dict(result["quality"]),
     )
-
-
-def _canonical_dimensions(
-    processed_width: int,
-    processed_height: int,
-) -> tuple[float, float, float]:
-    if processed_width <= 0 or processed_height <= 0:
-        raise ValueError("processed dimensions must be greater than zero")
-    scale = CANONICAL_WIDTH_PX / float(processed_width)
-    return CANONICAL_WIDTH_PX, float(processed_height) * scale, scale
-
-
-def _matches_training_aspect_ratio(
-    processed_width: int,
-    processed_height: int,
-) -> bool:
-    aspect_ratio = float(processed_width) / float(processed_height)
-    return abs(aspect_ratio - TRAINING_ASPECT_RATIO) / TRAINING_ASPECT_RATIO <= 0.02
 
 
 def _snap_boundaries(features: dict[str, Any]) -> dict[str, Any]:

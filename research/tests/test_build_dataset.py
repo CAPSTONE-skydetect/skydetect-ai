@@ -48,6 +48,13 @@ def test_small_end_to_end_exact_dataset(tmp_path):
     assert len(train) == 32 and len(test) == 8
     assert not (set(train.family_id) & set(test.family_id))
     assert manifest["family_leakage_count"] == 0
+    assert manifest["feature_contract"]["coordinate_policy"] == "fhd_width_1920_v1"
+    assert (
+        manifest["feature_contract"]["timebase_policy"]
+        == "timestamp_ms_priority_30hz_resample_v1"
+    )
+    assert train.feature_contract_id.nunique() == 1
+    assert test.feature_contract_id.iloc[0] == train.feature_contract_id.iloc[0]
     assert len(ledger) == 4*4*7*2
     assert (tmp_path/"candidate_ledger_v4.csv").exists()
     assert (tmp_path/"dataset_manifest.json").exists()

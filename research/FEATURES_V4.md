@@ -25,6 +25,11 @@ speed_i = norm(velocity_i)
 A가 생성하는 현재 timestamp는 고정 프레임 레이트와 평균 FPS를 전제로 하므로,
 가변 프레임 레이트 영상은 정확한 presentation timestamp 지원 전까지 제한사항이다.
 
+`feature_config_id`는 특징 계산식 설정만 식별한다. 운영 좌표·시간축 정책까지
+추적하기 위해 별도의 `feature_contract_id`를 사용하며, runtime `FeatureVector`,
+합성 CSV/manifest, 실제 A 궤적 import 결과에 같은 식별자를 기록한다. 비16:9
+입력은 현재 거부하지 않고 `aspect_ratio_matches_training=false` 경고로 남긴다.
+
 ## 특징 계약
 
 | 특징 | 정의 | 해석 |

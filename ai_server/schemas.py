@@ -256,6 +256,28 @@ class TrackFeatures(StrictModel):
     )
 
 
+class FeatureProvenance(StrictModel):
+    """B가 사용한 수식·좌표·시간축 계약과 입력별 변환 정보를 기록한다.
+
+    `feature_config_id`는 research 특징 계산 설정만 식별한다. 좌표 canonical
+    변환과 시간축 재표본화 정책은 별도 계약이므로 `feature_contract_id`가 이들을
+    함께 묶는다. C는 이 값을 모델 bundle의 provenance와 비교할 수 있다.
+    """
+
+    feature_version: str = Field(..., min_length=1)
+    feature_config_id: str = Field(..., min_length=1)
+    feature_contract_id: str = Field(..., min_length=1)
+    coordinate_policy: str = Field(..., min_length=1)
+    timebase_policy: str = Field(..., min_length=1)
+    target_feature_fps: float = Field(..., gt=0.0)
+    source_processed_width: int = Field(..., ge=1)
+    source_processed_height: int = Field(..., ge=1)
+    coordinate_scale: float = Field(..., gt=0.0)
+    canonical_width: float = Field(..., gt=0.0)
+    canonical_height: float = Field(..., gt=0.0)
+    aspect_ratio_matches_training: bool
+
+
 class FeatureVector(StrictModel):
     """
     B → C로 전달되는 최종 feature 패키지.
@@ -275,6 +297,7 @@ class FeatureVector(StrictModel):
         quality (TrackQuality | None): A가 만든 품질 정보
         feature_status (FeatureStatus): 계산 상태 ("ok" / "partial" / "failed")
         imputed_fields (list[str]): 보간/수정된 필드 목록
+        provenance (FeatureProvenance | None): B가 사용한 특징 계약과 좌표 변환
 
     상태 규칙:
         - failed  → features는 반드시 None
@@ -287,6 +310,7 @@ class FeatureVector(StrictModel):
     quality: TrackQuality | None = None
     feature_status: FeatureStatus = "ok"
     imputed_fields: list[str] = Field(default_factory=list, examples=[[]])
+    provenance: FeatureProvenance | None = None
 
     @model_validator(mode="after")
     def validate_feature_state(self) -> "FeatureVector":

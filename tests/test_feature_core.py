@@ -7,10 +7,11 @@ TrackSequence에서 뽑아 FeatureVector로 옮기는 변환만 본다.
 import numpy as np
 import pytest
 
-from ai_server.schemas import TrackPoint, TrackSequence
+from ai_server.schemas import TrackPoint, TrackQuality, TrackSequence
 from ai_server.services.feature_core import build_feature_vector
 from ai_server.services.prediction import classify_feature_vector
 from ai_server.services.train import FEATURE_NAMES
+from research.features import FeatureConfig
 
 FPS = 30
 
@@ -107,6 +108,15 @@ def test_runtime_features_use_full_hd_canonical_coordinates(resolution):
     assert result.coordinate_scale == pytest.approx(1920 / resolution[0])
     assert result.raw_quality["aspect_ratio_matches_training"] is True
     assert result.raw_quality["target_feature_fps"] == 30.0
+    assert result.feature_vector.provenance is not None
+    assert result.feature_vector.provenance.coordinate_policy == result.coordinate_policy
+    assert result.feature_vector.provenance.timebase_policy == result.timebase_policy
+    assert result.feature_vector.provenance.feature_config_id == result.feature_config_id
+    assert (
+        result.feature_vector.provenance.feature_contract_id
+        == result.feature_contract_id
+        == result.raw_quality["feature_contract_id"]
+    )
     assert result.feature_vector.features.model_dump() == pytest.approx(
         reference.feature_vector.features.model_dump(),
         rel=1e-10,
@@ -128,6 +138,91 @@ def test_classifier_result_is_resolution_invariant():
     assert [confidence for _, confidence in predictions] == pytest.approx(
         [predictions[0][1]] * len(predictions)
     )
+
+
+def test_non_16_by_9_input_is_warning_only_and_preserves_uniform_scale():
+    result = build_feature_vector(_track(_straight, resolution=(320, 200)))
+
+    assert result.accepted
+    assert result.canonical_width == 1920.0
+    assert result.canonical_height == 1200.0
+    assert result.feature_vector.provenance is not None
+    assert result.feature_vector.provenance.aspect_ratio_matches_training is False
+
+
+def test_feature_contract_id_covers_timebase_policy_not_only_formula_config():
+    at_30 = build_feature_vector(_track(_straight), config=FeatureConfig(target_fps=30))
+    at_60 = build_feature_vector(_track(_straight), config=FeatureConfig(target_fps=60))
+
+    assert at_30.feature_config_id != at_60.feature_config_id
+    assert at_30.timebase_policy == "timestamp_ms_priority_30hz_resample_v1"
+    assert at_60.timebase_policy == "timestamp_ms_priority_60hz_resample_v1"
+    assert (
+        at_30.feature_vector.provenance.feature_contract_id
+        != at_60.feature_vector.provenance.feature_contract_id
+    )
+
+
+def test_roi_start_offset_does_not_create_pre_roi_or_post_track_motion():
+    baseline = _track(_straight)
+    shifted = baseline.model_copy(
+        update={
+            "history": [
+                point.model_copy(
+                    update={
+                        "frame_index": point.frame_index + 120,
+                        "timestamp_ms": point.timestamp_ms + 4000,
+                    }
+                )
+                for point in baseline.history
+            ]
+        }
+    )
+
+    baseline_result = build_feature_vector(baseline)
+    shifted_result = build_feature_vector(shifted)
+
+    assert shifted_result.accepted
+    assert shifted_result.feature_vector.features.model_dump() == pytest.approx(
+        baseline_result.feature_vector.features.model_dump()
+    )
+    assert shifted_result.raw_quality["duration_seconds"] == pytest.approx(
+        baseline_result.raw_quality["duration_seconds"]
+    )
+
+
+def test_long_lost_gap_is_split_instead_of_interpolated():
+    track = _track(_straight, count=120)
+    track = track.model_copy(
+        update={
+            "history": [
+                point
+                for point in track.history
+                if not 40 <= point.frame_index < 65
+            ]
+        }
+    )
+
+    result = build_feature_vector(track)
+
+    assert result.accepted
+    assert result.raw_quality["long_gap_count"] == 1
+    assert result.raw_quality["usable_segments"] == 2
+    assert result.raw_quality["retained_duration_seconds"] < 3.3
+
+
+def test_a_track_quality_has_priority_over_b_fallback_quality():
+    quality = TrackQuality(
+        num_points=90,
+        mean_conf=0.77,
+        missing_ratio=0.25,
+        track_stability="fair",
+    )
+    track = _track(_straight).model_copy(update={"quality": quality})
+
+    result = build_feature_vector(track)
+
+    assert result.feature_vector.quality == quality
 
 
 def test_30_and_60_fps_curved_tracks_produce_equivalent_features():

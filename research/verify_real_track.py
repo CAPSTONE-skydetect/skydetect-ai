@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from .feature_contract import canonical_dimensions, feature_observation_metadata
 from .features import FEATURE_COLUMNS, FeatureConfig, extract_features
 from .io import write_json
 
@@ -54,8 +55,26 @@ class RealTrackVerifier:
                     raise ValueError("Duplicate track/video identity")
                 ids.add(sample_id)
                 history = track["history"]
-                result = extract_features(history, track["processed_width"], track["processed_height"],
-                                          entry.get("fps"), self.config)
+                processed_width = track["processed_width"]
+                processed_height = track["processed_height"]
+                canonical_width, canonical_height, _ = canonical_dimensions(
+                    processed_width,
+                    processed_height,
+                )
+                result = extract_features(
+                    history,
+                    canonical_width,
+                    canonical_height,
+                    entry.get("fps"),
+                    self.config,
+                )
+                policy_metadata = feature_observation_metadata(
+                    processed_width,
+                    processed_height,
+                    feature_config_id=self.config.fingerprint,
+                    target_fps=self.config.target_fps,
+                )
+                result["quality"].update(policy_metadata)
                 row = dict(sample_id=sample_id, family_id=f"real:{group}", label=entry["label"],
                            subtype=entry.get("subtype", "unknown"), split=entry["split"],
                            feature_status=result["feature_status"], feature_version=result["feature_version"],

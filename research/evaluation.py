@@ -21,6 +21,9 @@ def validate_table(table):
         raise ValueError(f"Only feature version {FEATURE_VERSION} is supported")
     if table.feature_config_id.isna().any() or table.feature_config_id.nunique() != 1:
         raise ValueError("Feature configurations cannot be mixed")
+    for column in ("feature_contract_id", "coordinate_policy", "timebase_policy"):
+        if column in table and (table[column].isna().any() or table[column].nunique() != 1):
+            raise ValueError(f"{column} values cannot be missing or mixed")
     if table.sample_id.duplicated().any() or table.family_id.isna().any():
         raise ValueError("Duplicate sample IDs or missing family IDs")
     if not set(table.label).issubset({"bird", "drone"}):
@@ -76,6 +79,8 @@ def evaluate_dataset(table, seed=42, real_table=None):
         return dict(status="insufficient_train_test_classes", scope="synthetic_only")
     report = dict(status="completed", scope="synthetic_only", feature_version=FEATURE_VERSION,
                   feature_config_id=str(valid.feature_config_id.iloc[0]),
+                  feature_contract_id=(str(valid.feature_contract_id.iloc[0])
+                                       if "feature_contract_id" in valid else None),
                   train_groups=train.family_id.nunique(), test_groups=test.family_id.nunique(),
                   train_rows=len(train), test_rows=len(test),
                   warning="Synthetic holdout measures simulator discrimination, not sim-to-real validity.",
@@ -117,6 +122,11 @@ def evaluate_dataset(table, seed=42, real_table=None):
         real = validate_table(real_table)
         if real_table.feature_config_id.iloc[0] != train.feature_config_id.iloc[0]:
             raise ValueError("Real and synthetic feature configurations differ")
+        if "feature_contract_id" in train or "feature_contract_id" in real_table:
+            if "feature_contract_id" not in train or "feature_contract_id" not in real_table:
+                raise ValueError("Real and synthetic feature contract provenance differs")
+            if real_table.feature_contract_id.iloc[0] != train.feature_contract_id.iloc[0]:
+                raise ValueError("Real and synthetic feature contracts differ")
         if "review_status" not in real:
             raise ValueError("Real holdout requires explicit manual review_status")
         real = real[(real.split == "test") & (real.review_status == "approved")]

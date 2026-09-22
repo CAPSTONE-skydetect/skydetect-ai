@@ -82,6 +82,7 @@ def create_manual_track(payload: ManualTrackingRequest) -> dict[str, object]:
             "status": extraction.feature_vector.feature_status,
             "version": extraction.feature_version,
             "config_id": extraction.feature_config_id,
+            "contract_id": extraction.feature_contract_id,
             "coordinate_policy": extraction.coordinate_policy,
             "timebase_policy": extraction.timebase_policy,
             "coordinate_scale": extraction.coordinate_scale,
