@@ -82,6 +82,13 @@ def create_manual_track(payload: ManualTrackingRequest) -> dict[str, object]:
             "status": extraction.feature_vector.feature_status,
             "version": extraction.feature_version,
             "config_id": extraction.feature_config_id,
+            "coordinate_policy": extraction.coordinate_policy,
+            "timebase_policy": extraction.timebase_policy,
+            "coordinate_scale": extraction.coordinate_scale,
+            "canonical_size": [
+                extraction.canonical_width,
+                extraction.canonical_height,
+            ],
             "values": (
                 extraction.feature_vector.features.model_dump(mode="json")
                 if extraction.feature_vector.features

@@ -106,7 +106,9 @@ Outputs:
 - `active_span_observation_ratio`: observations between A's first and last
   visible prediction, separating internal losses from late start/early finish
 - `attempted_window_observation_ratio`: observations within the frame range A
-  actually processed according to `metadata.json.num_frames_processed`
+  actually attempted according to `metadata.json.tracking_start_frame` and
+  `attempted_frame_count` (legacy artifacts fall back to frame zero and
+  `num_frames_processed`)
 - observed-frame center error in source pixels: mean, median, p95, maximum
 - center error divided by the GT bbox diagonal
 - success at 5, 10, and 20 source pixels
@@ -124,9 +126,10 @@ runs such as `max_seconds` experiments.
 
 ## Trimmed inputs and partial processing
 
-If A receives the same full source but stops early because of `max_seconds`, do
-not set an offset. `frame_count` remains the full source length and
-`num_frames_processed` defines the attempted evaluation window.
+If A receives the same full source but starts from a later manual ROI frame or
+stops early because of `max_seconds`, do not set an offset. `frame_count`
+remains the full source length, while `tracking_start_frame` and
+`attempted_frame_count` define the attempted evaluation window.
 
 If A receives a verified trimmed copy whose frame zero corresponds to frame 200
 of the CVAT source, declare both facts explicitly:

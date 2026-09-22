@@ -48,7 +48,11 @@ def observations_to_track_sequence(
         raise ValueError("tracking produced no visible observations")
 
     attempted_frame_count = len(
-        {observation.frame_index for observation in observations}
+        {
+            observation.frame_index
+            for observation in observations
+            if getattr(observation, "lifecycle_state", "ACTIVE") != "EXITED"
+        }
     )
     return TrackSequence(
         track_id=track_id,

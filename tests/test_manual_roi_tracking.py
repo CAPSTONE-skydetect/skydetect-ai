@@ -8,7 +8,11 @@ from fastapi.testclient import TestClient
 from ai_server.main import app
 from ai_server.routers import ui as ui_routes
 from ai_server.schemas import TrackSequence
-from ai_server.services.manual_roi_tracker import process_manual_roi_video
+from ai_server.services.manual_roi_tracker import (
+    PointObservation,
+    _write_overlay,
+    process_manual_roi_video,
+)
 from ai_server.tracking_schemas import TrackingTuning
 
 
@@ -35,6 +39,13 @@ def test_tracks_twenty_pixel_target_and_exports_contract(tmp_path: Path) -> None
     assert result.track.quality is not None
     assert result.metrics["visible_ratio"] > 0.75
     assert result.metrics["tracking_source_counts"]["klt"] > 20
+    assert result.metadata["timebase"] == {
+        "timestamp_source": "frame_index_and_average_fps",
+        "source_fps": 20.0,
+        "timestamp_unit": "ms",
+        "timestamp_resolution_ms": 1,
+        "variable_frame_rate_supported": False,
+    }
 
     track_path = Path(result.artifacts["track_sequence"] or "")
     persisted = TrackSequence.model_validate_json(track_path.read_text(encoding="utf-8"))
@@ -89,19 +100,127 @@ def test_predictions_stay_out_of_track_history(tmp_path: Path) -> None:
 
     trajectory_path = Path(result.artifacts["trajectory"] or "")
     with trajectory_path.open(newline="", encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
+        trajectory_rows = list(csv.DictReader(handle))
+    debug_path = Path(result.artifacts["debug_observations"] or "")
+    with debug_path.open(newline="", encoding="utf-8") as handle:
+        debug_rows = list(csv.DictReader(handle))
 
     prediction_frames = {
         int(row["frame_index"])
-        for row in rows
+        for row in debug_rows
         if row["tracking_source"] == "prediction"
     }
     history_frames = {point.frame_index for point in result.track.history}
     assert prediction_frames
     assert prediction_frames.isdisjoint(history_frames)
+    assert all(row["visible"] == "True" for row in trajectory_rows)
+    assert not any(
+        row["tracking_source"] == "prediction" for row in trajectory_rows
+    )
     assert result.metrics["tracking_source_counts"]["appearance"] >= 1
     assert result.track.quality is not None
     assert result.track.quality.missing_ratio > 0.0
+
+
+def test_tracking_starts_at_selected_roi_frame(tmp_path: Path) -> None:
+    video_path = tmp_path / "mid_video_roi.mp4"
+    _make_twenty_pixel_video(video_path)
+
+    result = process_manual_roi_video(
+        str(video_path),
+        source_video_id="mid-video-roi",
+        output_dir=tmp_path / "outputs",
+        target_bbox=(60.0, 58.0, 32.0, 32.0),
+        init_frame_index=10,
+        stabilize=False,
+        resize_width=None,
+        write_overlay=False,
+    )
+
+    trajectory_path = Path(result.artifacts["trajectory"] or "")
+    with trajectory_path.open(newline="", encoding="utf-8") as handle:
+        trajectory_rows = list(csv.DictReader(handle))
+    debug_path = Path(result.artifacts["debug_observations"] or "")
+    with debug_path.open(newline="", encoding="utf-8") as handle:
+        debug_rows = list(csv.DictReader(handle))
+
+    assert result.track.history[0].frame_index == 10
+    assert min(int(row["frame_index"]) for row in trajectory_rows) == 10
+    assert min(int(row["frame_index"]) for row in debug_rows) == 10
+    assert result.metadata["tracking_start_frame"] == 10
+    assert result.metadata["attempted_frame_count"] <= 38
+
+
+def test_tracking_exits_without_clamping_prediction_to_frame_edge(
+    tmp_path: Path,
+) -> None:
+    video_path = tmp_path / "exiting_target.mp4"
+    _make_exiting_video(video_path)
+
+    result = process_manual_roi_video(
+        str(video_path),
+        source_video_id="exiting-target",
+        output_dir=tmp_path / "outputs",
+        target_bbox=(24.0, 64.0, 32.0, 32.0),
+        stabilize=False,
+        resize_width=None,
+        write_overlay=False,
+        tuning=TrackingTuning(exit_confirmation_frames=3),
+    )
+
+    debug_path = Path(result.artifacts["debug_observations"] or "")
+    with debug_path.open(newline="", encoding="utf-8") as handle:
+        debug_rows = list(csv.DictReader(handle))
+    exited_rows = [
+        row for row in debug_rows if row["lifecycle_state"] == "EXITED"
+    ]
+
+    assert result.metadata["termination_reason"] == "exited_frame"
+    assert result.metadata["exit_confirmed_frame"] < 39
+    assert result.metadata["tracking_end_frame"] < result.metadata["exit_confirmed_frame"]
+    assert len(exited_rows) == 3
+    assert max(float(row["raw_x"]) for row in exited_rows) > 160.0
+    assert result.track.quality is not None
+    assert result.track.quality.missing_ratio == result.metrics["missing_ratio"]
+
+
+def test_overlay_does_not_draw_bbox_for_lost_observation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class _MemoryWriter:
+        def __init__(self) -> None:
+            self.frames: list[np.ndarray] = []
+
+        def write(self, frame: np.ndarray) -> None:
+            self.frames.append(frame.copy())
+
+        def release(self) -> None:
+            pass
+
+    writer = _MemoryWriter()
+    monkeypatch.setattr(
+        "ai_server.services.manual_roi_tracker.create_tracking_video_writer",
+        lambda *args, **kwargs: writer,
+    )
+    frames = [
+        (index, np.zeros((100, 120, 3), dtype=np.uint8)) for index in range(3)
+    ]
+    observations = [
+        _make_observation(1, x=80.0, y=70.0, visible=False, state="LOST"),
+        _make_observation(2, x=82.0, y=70.0, visible=True, state="ACTIVE"),
+    ]
+
+    _write_overlay(
+        frame_items=frames,
+        observations=observations,
+        output_path=tmp_path / "overlay.mp4",
+        fps=20.0,
+    )
+
+    assert not writer.frames[0].any()
+    assert not writer.frames[1][55:86, 65:96].any()
+    assert writer.frames[2][55:86, 67:98].any()
 
 
 def test_tracks_white_target_across_white_road(tmp_path: Path) -> None:
@@ -211,6 +330,14 @@ def test_browser_ui_uploads_tracks_and_downloads_result(
     assert track.processed_width == 320
     assert track.processed_height == 200
     assert len(track.history) >= 15
+    assert result["features"]["coordinate_policy"] == "fhd_width_1920_v1"
+    assert (
+        result["features"]["timebase_policy"]
+        == "timestamp_ms_priority_30hz_resample_v1"
+    )
+    assert result["features"]["coordinate_scale"] == 6.0
+    assert result["features"]["canonical_size"] == [1920.0, 1200.0]
+    assert result["features"]["quality"]["aspect_ratio_matches_training"] is False
 
     track_url = result["download_urls"]["track_sequence"]
     download = client.get(track_url)
@@ -258,6 +385,81 @@ def _make_twenty_pixel_video(
         writer.write(frame)
 
     writer.release()
+
+
+def _make_exiting_video(
+    path: Path,
+    frame_count: int = 40,
+    fps: float = 20.0,
+) -> None:
+    width, height = 160, 120
+    writer = cv2.VideoWriter(
+        str(path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (width, height),
+    )
+    assert writer.isOpened()
+
+    for frame_index in range(frame_count):
+        frame = np.full((height, width, 3), (205, 214, 222), dtype=np.uint8)
+        center_x = int(round(40.0 + frame_index * 5.0))
+        center_y = 80
+        if center_x - 12 < width:
+            cv2.line(
+                frame,
+                (center_x - 10, center_y),
+                (center_x + 10, center_y),
+                (25, 31, 37),
+                3,
+            )
+            cv2.line(
+                frame,
+                (center_x, center_y - 6),
+                (center_x, center_y + 6),
+                (25, 31, 37),
+                3,
+            )
+            cv2.circle(frame, (center_x, center_y), 4, (238, 242, 245), -1)
+            cv2.circle(frame, (center_x, center_y), 5, (25, 31, 37), 1)
+        writer.write(frame)
+
+    writer.release()
+
+
+def _make_observation(
+    frame_index: int,
+    *,
+    x: float,
+    y: float,
+    visible: bool,
+    state: str,
+) -> PointObservation:
+    return PointObservation(
+        frame_index=frame_index,
+        timestamp_ms=frame_index * 50,
+        raw_x=x,
+        raw_y=y,
+        compensated_x=x,
+        compensated_y=y,
+        w=30.0,
+        h=30.0,
+        confidence=0.8 if visible else 0.12,
+        visible=visible,
+        lifecycle_state=state,
+        visible_points=8 if visible else 0,
+        bg_points=0,
+        bg_inliers=0,
+        bg_inlier_ratio=1.0,
+        direction="forward",
+        tracking_source="klt" if visible else "prediction",
+        fb_error=0.0 if visible else 99.0,
+        template_score=1.0 if visible else 0.0,
+        appearance_score=1.0 if visible else 0.0,
+        foreground_contrast=0.5 if visible else 0.0,
+        motion_score=0.0,
+        appearance_model_updated=False,
+    )
 
 
 def _make_white_road_transition_video(

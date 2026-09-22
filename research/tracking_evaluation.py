@@ -70,6 +70,8 @@ class VideoGeometry:
     fps: float
     frame_count: int
     num_frames_processed: int
+    tracking_start_frame: int
+    attempted_frame_count: int
     original_to_processed: np.ndarray
     transform_source: str
 
@@ -204,6 +206,22 @@ def load_video_geometry(path: str | Path) -> VideoGeometry:
         raise TrackingEvaluationError(
             "metadata num_frames_processed must be between 1 and frame_count"
         )
+    tracking_start_frame = int(metadata.get("tracking_start_frame") or 0)
+    attempted_frame_count = int(
+        metadata.get("attempted_frame_count") or num_frames_processed
+    )
+    if tracking_start_frame < 0 or tracking_start_frame >= frame_count:
+        raise TrackingEvaluationError(
+            "metadata tracking_start_frame must be within the source video"
+        )
+    if (
+        attempted_frame_count <= 0
+        or tracking_start_frame + attempted_frame_count > frame_count
+    ):
+        raise TrackingEvaluationError(
+            "metadata attempted_frame_count must fit between tracking_start_frame "
+            "and the end of the source video"
+        )
 
     explicit = metadata.get("original_to_processed")
     if explicit is None and isinstance(metadata.get("coordinate_transform"), dict):
@@ -248,6 +266,8 @@ def load_video_geometry(path: str | Path) -> VideoGeometry:
         fps=fps,
         frame_count=frame_count,
         num_frames_processed=num_frames_processed,
+        tracking_start_frame=tracking_start_frame,
+        attempted_frame_count=attempted_frame_count,
         original_to_processed=matrix,
         transform_source=transform_source,
     )
@@ -310,6 +330,7 @@ def evaluate_track(
     fps: float,
     sample_id: str,
     prediction_frame_offset: int = 0,
+    attempted_start_frame: int = 0,
     attempted_frame_count: int | None = None,
     pixel_thresholds: tuple[float, ...] = (5.0, 10.0, 20.0),
     normalized_thresholds: tuple[float, ...] = (0.25, 0.5, 1.0),
@@ -371,7 +392,7 @@ def evaluate_track(
         if prediction_frames
         else set()
     )
-    attempted_start = prediction_frame_offset
+    attempted_start = prediction_frame_offset + attempted_start_frame
     attempted_end = (
         attempted_start + attempted_frame_count - 1
         if attempted_frame_count is not None
@@ -541,7 +562,8 @@ def evaluate_files(
         fps=geometry.fps,
         sample_id=sample_id,
         prediction_frame_offset=prediction_frame_offset,
-        attempted_frame_count=geometry.num_frames_processed,
+        attempted_start_frame=geometry.tracking_start_frame,
+        attempted_frame_count=geometry.attempted_frame_count,
     )
     report["inputs"] = {
         "cvat_xml": str(Path(cvat_xml)),
@@ -552,6 +574,8 @@ def evaluate_files(
         "fps": geometry.fps,
         "frame_count": geometry.frame_count,
         "num_frames_processed": geometry.num_frames_processed,
+        "tracking_start_frame": geometry.tracking_start_frame,
+        "attempted_frame_count": geometry.attempted_frame_count,
         "source_width": geometry.source_width,
         "source_height": geometry.source_height,
         "processed_width": geometry.processed_width,

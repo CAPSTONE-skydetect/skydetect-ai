@@ -70,6 +70,31 @@ def test_explicit_transform_supports_letterbox_coordinates(tmp_path: Path) -> No
     assert report["localization"]["observed_frame_error_px"]["max"] == 0.0
 
 
+def test_attempted_window_starts_at_selected_roi_frame(tmp_path: Path) -> None:
+    gt_path, trajectory_path, metadata_path = _write_sample_files(tmp_path)
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.update(
+        {
+            "num_frames_processed": 2,
+            "tracking_start_frame": 1,
+            "attempted_frame_count": 2,
+        }
+    )
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    report = evaluate_files(
+        cvat_xml=gt_path,
+        trajectory_csv=trajectory_path,
+        metadata_json=metadata_path,
+        sample_id="mid-video-roi",
+        track_id=0,
+    )
+
+    assert report["timeline"]["attempted_first_frame"] == 1
+    assert report["timeline"]["attempted_last_frame"] == 2
+    assert report["coverage"]["attempted_window_observation_ratio"] == 0.5
+
+
 def test_legacy_aspect_ratio_change_is_rejected_without_transform(tmp_path: Path) -> None:
     metadata_path = tmp_path / "metadata.json"
     metadata_path.write_text(

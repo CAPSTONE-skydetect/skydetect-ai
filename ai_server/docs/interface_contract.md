@@ -25,9 +25,23 @@ The current contract owner is `ai_server/schemas.py`.
   ordered by frame without duplicates
 - Internal prediction-only frames are not part of `history`; their absence is a
   frame-index gap
+- Manual ROI tracking starts at `init_frame_index`; A does not infer or export
+  observations for earlier frames
+- `trajectory.csv` contains visible observations only, while
+  `debug/observations.csv` retains ACTIVE/LOST/EXITED lifecycle evidence
+- Confirmed EXITED frames are diagnostic and are excluded from
+  `TrackQuality.missing_ratio`
 - `TrackPoint` coordinates and sizes are normalized to `[0, 1]`
 - `TrackSequence.processed_width` and `processed_height` are the exact frame
   dimensions used as the normalization denominators, after any A-side resize
+- Runtime B converts normalized centers to the canonical
+  `fhd_width_1920_v1` coordinate space before feature extraction. The uniform
+  scale is `1920 / processed_width`; canonical height preserves the input
+  aspect ratio. This keeps speed and acceleration aligned with the existing
+  Full HD training data without forcing A to track at Full HD.
+- `timestamp_ms` is the primary B timebase and feature extraction resamples
+  accepted segments to 30 Hz. An explicit `fps` is only a fallback when an
+  external research record has no timestamps.
 - When stabilization is applied, `cx` and `cy` are camera-motion-compensated
 - `TrackPoint.conf` is observation confidence, not detector confidence
 - `StabilizationInfo` is included in `TrackSequence` so downstream stages know whether A applied global motion compensation
@@ -39,3 +53,5 @@ The current contract owner is `ai_server/schemas.py`.
 - Confirm whether `stabilization` and `quality` should remain optional shared fields
 - Confirm whether `track_id` is video-local or globally unique
 - Confirm whether C wants a stricter schema than `quality: dict[str, str | int | float]`
+- Decide whether non-16:9 tracks should remain warning-only or be rejected once
+  real A validation data are available

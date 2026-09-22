@@ -24,6 +24,11 @@ from ai_server.schemas import (
 from ai_server.utils.quality import build_track_quality
 from research.features import FeatureConfig, extract_features
 
+CANONICAL_COORDINATE_POLICY = "fhd_width_1920_v1"
+CANONICAL_WIDTH_PX = 1920.0
+TRAINING_ASPECT_RATIO = 16.0 / 9.0
+TIMEBASE_POLICY = "timestamp_ms_priority_30hz_resample_v1"
+
 # research 쪽 상태값과 스키마 쪽 FeatureStatus 는 어휘가 다르다.
 # research 는 "표본을 학습에 채택할 것인가"를, 스키마는 "피처가 쓸 수 있는가"를
 # 뜻한다. partial 은 research 가 만들지 않는다. 일부만 계산되는 상태를 두지 않고
@@ -45,6 +50,11 @@ class FeatureExtractionResult:
     feature_vector: FeatureVector
     feature_version: str
     feature_config_id: str
+    coordinate_policy: str
+    timebase_policy: str
+    coordinate_scale: float
+    canonical_width: float
+    canonical_height: float
     reasons: list[str] = field(default_factory=list)
     raw_quality: dict[str, Any] = field(default_factory=dict)
 
@@ -85,12 +95,34 @@ def build_feature_vector(
         for point in track.history
     ]
 
+    canonical_width, canonical_height, coordinate_scale = _canonical_dimensions(
+        track.processed_width,
+        track.processed_height,
+    )
+    effective_config = config or FeatureConfig()
     result = extract_features(
         history,
-        image_width=track.processed_width,
-        image_height=track.processed_height,
+        image_width=canonical_width,
+        image_height=canonical_height,
         fps=fps,
-        config=config,
+        config=effective_config,
+    )
+    result["quality"].update(
+        {
+            "coordinate_policy": CANONICAL_COORDINATE_POLICY,
+            "timebase_policy": TIMEBASE_POLICY,
+            "target_feature_fps": effective_config.target_fps,
+            "coordinate_scale": coordinate_scale,
+            "source_processed_width": track.processed_width,
+            "source_processed_height": track.processed_height,
+            "canonical_width": canonical_width,
+            "canonical_height": canonical_height,
+            "training_aspect_ratio": TRAINING_ASPECT_RATIO,
+            "aspect_ratio_matches_training": _matches_training_aspect_ratio(
+                track.processed_width,
+                track.processed_height,
+            ),
+        }
     )
 
     status = _STATUS_MAP.get(result["feature_status"], "failed")
@@ -109,9 +141,32 @@ def build_feature_vector(
         ),
         feature_version=result["feature_version"],
         feature_config_id=result["feature_config_id"],
+        coordinate_policy=CANONICAL_COORDINATE_POLICY,
+        timebase_policy=TIMEBASE_POLICY,
+        coordinate_scale=coordinate_scale,
+        canonical_width=canonical_width,
+        canonical_height=canonical_height,
         reasons=list(result["reasons"]),
         raw_quality=dict(result["quality"]),
     )
+
+
+def _canonical_dimensions(
+    processed_width: int,
+    processed_height: int,
+) -> tuple[float, float, float]:
+    if processed_width <= 0 or processed_height <= 0:
+        raise ValueError("processed dimensions must be greater than zero")
+    scale = CANONICAL_WIDTH_PX / float(processed_width)
+    return CANONICAL_WIDTH_PX, float(processed_height) * scale, scale
+
+
+def _matches_training_aspect_ratio(
+    processed_width: int,
+    processed_height: int,
+) -> bool:
+    aspect_ratio = float(processed_width) / float(processed_height)
+    return abs(aspect_ratio - TRAINING_ASPECT_RATIO) / TRAINING_ASPECT_RATIO <= 0.02
 
 
 def _snap_boundaries(features: dict[str, Any]) -> dict[str, Any]:

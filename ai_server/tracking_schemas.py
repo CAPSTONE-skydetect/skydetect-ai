@@ -8,6 +8,7 @@ class TrackingTuning(StrictModel):
     recovery_conf: float = Field(default=0.58, ge=0.10, le=0.95)
     update_conf: float = Field(default=0.76, ge=0.10, le=0.99)
     search_radius_multiplier: float = Field(default=2.5, ge=1.0, le=8.0)
+    exit_confirmation_frames: int = Field(default=3, ge=1, le=120)
     online_update_enabled: bool = False
 
 
