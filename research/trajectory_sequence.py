@@ -7,7 +7,7 @@ import numpy as np
 from scipy.signal import butter, sosfiltfilt
 
 
-CONTRACT_VERSION = "trajectory-sequence-1.0.0"
+CONTRACT_VERSION = "trajectory-sequence-1.0.1"
 CHANNELS = ("q_x", "q_y", "d_x", "d_y")
 
 
@@ -80,7 +80,11 @@ def _read_observations(track):
         raise ValueError("Frame indices must be integers")
     if np.any(values[:, 2:] < 0) or np.any(values[:, 2:] > 1):
         raise ValueError("Exported centers must be within [0, 1]")
-    period = float(np.median(dt / df))
+    # Fit the whole frame clock: median 33/34 ms steps bias 30 Hz to 30.303 Hz.
+    clock_frames = frames-frames[0]
+    clock_time = time-time[0]
+    centered_frames = clock_frames-clock_frames.mean()
+    period = float(centered_frames@(clock_time-clock_time.mean())/(centered_frames@centered_frames))
     # Large inconsistent frame clocks need explicit handling, not silent time warping.
     if np.max(np.abs(dt / df - period)) > max(0.002, 0.1 * period):
         raise ValueError("Inconsistent frame/timestamp clock")

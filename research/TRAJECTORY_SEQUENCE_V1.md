@@ -9,7 +9,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 계약 버전 | trajectory-sequence-1.0.0 |
+| 계약 버전 | trajectory-sequence-1.0.1 |
 | X | float32, `(N, 4, 60)`, 모두 유한값 |
 | 채널 순서 | q_x, q_y, d_x, d_y |
 | 시간 | timestamp_ms -> 초, 30Hz |
@@ -50,7 +50,8 @@ d_i = q_i - q_(i-1), i >= 1
 ## 3. 시간·gap·필터
 
 - frame_index는 증가하는 정수, timestamp_ms는 유한하고 엄격하게 증가하는 값이어야 한다. 정렬·중복 제거로 오류를 숨기지 않는다.
-- 기본 프레임 주기 T는 `median(diff(timestamp_seconds)/diff(frame_index))`로 추정한다.
+- 기본 프레임 주기 T는 전체 `frame_index`와 `timestamp_seconds`의 선형 clock 기울기로 추정한다.
+- 정수 밀리초로 반올림된 30Hz의 33/34ms 간격을 중앙값으로 처리하면 30.303Hz로 오인한다. v1.0.1은 이를 수정했다.
 - 구간별 위 비율이 T와 `max(2ms, 10% T)`보다 크게 다르면 비일관 clock으로 제외한다.
 - 관측 간격 dt가 1.5T보다 크면 누락 구간으로 보고 누락 지속시간을 dt-T로 계산한다.
 - 누락 시간이 0.1초 + timestamp 반올림 허용 1ms를 넘는 구간을 가로지르는 창은 제외한다.
@@ -124,3 +125,14 @@ research/output은 gitignore 대상이며 코드·계약·테스트는 Git 추�
 
 이 전달본에는 실제 기반 증강, 시뮬레이터 샘플, 클래스 균형을 위한 복제, MiniRocket 학습이 없다.
 다음 단계에서 같은 입력 계약을 사용해 실제 train 증강 및 합성 train을 추가하고 별도 버전으로 배포한다.
+
+## 7. v1.0.1 이관
+
+현재 계약 ID는 기본 설정에서 `eb9be8154ee0f404`다. 입력 형태와 좌표 정규화 식은 같지만 source FPS 추정과 필터 적용 판단이 수정됐다.
+이전에 생성한 `real_sequences_v1`의 계약은 1.0.0 (`67b1c5196be68380`)이며 자동으로 덮어쓰지 않았다.
+서로 다른 버전의 train/validation/test 또는 MiniRocket 전처리를 섞지 않는다.
+
+이번 Sim-to-Real 비교용으로 기존 그룹 배치를 유지한 train/validation만 `output/real_sequences_clock_v1_1`에 재처리했다.
+train 156개, validation 59개 2초 창이다. 이 폴더에는 test.npz가 없으며 이번 작업에서 실제 test 좌표를 열지 않았다.
+validation은 후보 선택 전에 고정된 label-free 전처리로 배열을 준비했지만, 보정값/후보 선정에는 사용하지 않았다.
+C의 최종 데이터셋 배포 시 test를 같은 계약으로 별도 변환해야 한다.

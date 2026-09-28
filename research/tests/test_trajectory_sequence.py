@@ -113,6 +113,17 @@ def test_high_fps_anti_alias_suppresses_out_of_band_signal():
     assert np.std(hw[1]["X"][1]) < .15*np.std(lw[1]["X"][1])
 
 
+@pytest.mark.parametrize("fps", [30, 29.97, 60, 59.94])
+def test_integer_millisecond_clock_does_not_bias_native_fps_or_filter_choice(fps):
+    t = track(fps=fps, duration=5)
+    for p in t["history"]:
+        p["timestamp_ms"] = int(round(p["timestamp_ms"]))
+    t["history"] = [p for p in t["history"] if p["frame_index"] not in (20, 21)]
+    windows, _ = window_track(t)
+    assert windows and windows[0]["source_fps"] == pytest.approx(fps, rel=2e-4)
+    assert windows[0]["anti_alias_applied"] == (fps > 30.3)
+
+
 def test_upsampling_preserves_seconds_not_signal_claim():
     windows, _ = window_track(track(fps=15))
     assert len(windows) == 3 and windows[0]["X"].shape == (4, 60)
