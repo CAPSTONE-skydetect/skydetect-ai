@@ -2,6 +2,10 @@
 
 이 문서는 소스와 함께 추적하는 모델 명세다. 실행 결과는 `output/physics_v4/`에 별도로 생성한다. **물리 방정식과 수치 구현의 검증(verification)은 실제 관측과의 일치 검증(validation)이 아니다.** 현재 실제 A 궤적, 조류 GPS, 기체 비행 로그로 보정한 모델은 아니다.
 
+2초 시계열용 행동 전환 및 실제 A 관측 기반 보정 경로를 별도로 추가했다.
+[Sim-to-Real 시계열 명세](SIM_TO_REAL_SEQUENCE_V1.md)를 참고한다. 이 경로는 기존 힘 모델을 사용하면서 명령과 촬영·관측 조건을 조정하며,
+물리 파라미터 자체를 실측으로 식별한 것은 아니다. 기존 BatchRunner는 보정 전 재현용으로 유지한다.
+
 ## 변경 범위
 
 - `SIMULATOR_VERSION=4.0.0`, `FEATURE_VERSION=4.0.0`이다. Feature v4는 bbox 정규화와 bbox 면적 특징을 제거하고 중심점 기반 apparent-motion 특징 9개를 사용한다.
