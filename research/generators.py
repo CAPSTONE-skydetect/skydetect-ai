@@ -40,6 +40,7 @@ class Environment:
         if self.x_goal.shape != (3,) or not np.isfinite(self.x_goal).all():
             raise ValueError("Goal must be a finite 3D position")
         self.updraft = 0.
+        self.command_velocity = None
 
     @property
     def h_star(self):

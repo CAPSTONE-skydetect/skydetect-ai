@@ -17,16 +17,27 @@ class NoiseConfig:
     drift_probability: float = OBSERVATION_PRIORS["drift_probability"]
     burst_probability: float = OBSERVATION_PRIORS["burst_probability"]
     camera_probability: float = OBSERVATION_PRIORS["camera_probability"]
+    jitter_ar1: float = .55
+    jitter_ar2: float = 0.
+    jitter_difficulty_gain: float = 1.
+    jitter_motion_fraction: float = 0.
 
     def __post_init__(self):
         if not np.all(np.isfinite(list(asdict(self).values()))):
             raise ValueError("Noise parameters must be finite")
+        if not 0 <= self.jitter_motion_fraction <= .5:
+            raise ValueError("Motion residual fraction must be between zero and 0.5")
         if self.jitter_px < 0 or self.bbox_log_std < 0:
             raise ValueError("Noise magnitudes must be nonnegative")
         for value in (self.dropout_rate, self.drift_probability,
                       self.burst_probability, self.camera_probability):
             if not 0 <= value <= 1:
                 raise ValueError("Probabilities must lie in [0, 1]")
+        if (abs(self.jitter_ar2) >= 1 or self.jitter_ar1+self.jitter_ar2 >= 1
+                or self.jitter_ar2-self.jitter_ar1 >= 1):
+            raise ValueError("Jitter AR process must be stationary")
+        if self.jitter_difficulty_gain < 0:
+            raise ValueError("Jitter difficulty gain must be nonnegative")
 
 
 def drift_offset(frame, profile):
@@ -53,6 +64,8 @@ class ObservationModel:
         if not np.isfinite(fps) or fps <= 0:
             raise ValueError("fps must be positive")
         c, rng, cfg = self.camera, self.rng, self.config
+        if cfg.jitter_ar2 and not np.isclose(fps, 30):
+            raise ValueError("Second-order jitter currently supports 30 Hz only")
         n = len(truth)
         initial = next((x for x in truth if x is not None), None)
         initial_size = (np.array([initial["w"] * c.width, initial["h"] * c.height])
@@ -89,6 +102,7 @@ class ObservationModel:
         base_size = np.maximum(1., initial_size * roi_scale) if self.enabled else initial_size
         current_size = base_size.copy()
         jitter = np.zeros(2)
+        previous_jitter = np.zeros(2)
         size_noise = np.zeros(2)
         histories, debug = [], []
         lost = 0
@@ -137,9 +151,22 @@ class ObservationModel:
                 # A stabilizes centers but retains the raw tracker bbox dimensions.
                 size = size * raw_scale
             if self.enabled:
-                jitter_rho, size_rho = .55 ** (30 / fps), .8 ** (30 / fps)
-                jitter = jitter_rho * jitter + np.sqrt(1 - jitter_rho ** 2) * rng.normal(
-                    0., cfg.jitter_px * (1 + difficulty), 2)
+                sigma = cfg.jitter_px
+                if cfg.jitter_motion_fraction:
+                    sigma = float(np.hypot(sigma, cfg.jitter_motion_fraction*movement))
+                sigma *= 1+cfg.jitter_difficulty_gain*difficulty
+                if cfg.jitter_ar2:
+                    a, b = cfg.jitter_ar1, cfg.jitter_ar2
+                    rho1, rho2 = a/(1-b), a*a/(1-b)+b
+                    innovation = np.sqrt(max(0., 1-a*rho1-b*rho2))
+                    new_jitter = a*jitter+b*previous_jitter+innovation*rng.normal(
+                        0., sigma, 2)
+                else:
+                    jitter_rho = np.sign(cfg.jitter_ar1)*abs(cfg.jitter_ar1)**(30/fps)
+                    new_jitter = jitter_rho*jitter+np.sqrt(1-jitter_rho**2)*rng.normal(
+                        0., sigma, 2)
+                previous_jitter, jitter = jitter.copy(), new_jitter
+                size_rho = .8 ** (30/fps)
                 size_noise = size_rho * size_noise + np.sqrt(1 - size_rho ** 2) * rng.normal(0., cfg.bbox_log_std, 2)
                 desired_size = size * roi_scale * np.exp(size_noise)
                 desired_size = np.clip(desired_size, np.maximum(1., .65 * base_size), 2.2 * base_size)
