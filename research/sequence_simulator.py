@@ -13,7 +13,7 @@ from .observation import NoiseConfig, ObservationModel
 from .pipeline import stable_seed
 
 
-SEQUENCE_SIMULATOR_VERSION = "sequence-guidance-1.3.0"
+SEQUENCE_SIMULATOR_VERSION = "sequence-guidance-1.5.0"
 BIRDS = ("pigeon", "seagull", "falcon")
 QUADS = ("consumer_quad", "racing_quad", "hover_quad")
 
@@ -37,6 +37,10 @@ class AcquisitionProfile:
     jitter_difficulty_gain: float = 1.
     jitter_motion_fraction: float = 0.
     aspect_4_3_probability: float = 0.
+    ground_camera: bool = False
+    camera_height_m: float = 1.5
+    ground_min_fov_deg: float = 5.
+    wing_centroid_ratio: float = 0.
 
     def __post_init__(self):
         values = [v for k, v in asdict(self).items() if k != "name"]
@@ -48,6 +52,12 @@ class AcquisitionProfile:
             raise ValueError("Invalid camera ranges")
         if not 0 <= self.aspect_4_3_probability <= 1:
             raise ValueError("Invalid aspect sampling probability")
+        if not isinstance(self.ground_camera, bool) or not 0 < self.camera_height_m <= 20:
+            raise ValueError("Invalid ground camera height/mode")
+        if not 1 < self.ground_min_fov_deg <= self.fov_low_deg:
+            raise ValueError("Invalid ground camera field of view")
+        if not 0 <= self.wing_centroid_ratio <= .25:
+            raise ValueError("Wing centroid ratio must be between zero and 0.25")
         self.noise_config()
 
     def noise_config(self):
@@ -196,6 +206,7 @@ def latent_flight(label, subtype, seed, duration=8.0, fps=30, guidance=None):
     return dict(label=label, subtype=subtype, seed=int(seed), fps=fps, duration_s=duration,
                 schedule=schedule.segments, template=list(schedule.template), world_truth=rows,
                 latent_failure=failure, scaling=scaling, width_m=agent.real_width, height_m=agent.real_height,
+                wing_frequency_hz=float(agent.flap_hz), wing_phase_rad=float(agent.flap_phase),
                 physical_parameters=agent.config, simulator=SEQUENCE_SIMULATOR_VERSION,
                 guidance=asdict(guidance or GuidanceProfile()))
 
@@ -217,11 +228,32 @@ def observe_flight(flight, profile):
     reference_travel = 30.
     fov = float(rng.uniform(profile.fov_low_deg, profile.fov_high_deg))
     distance = float(np.clip(reference_travel/(2*np.tan(np.radians(fov)/2)*span), 20., 1500.))
+    requested_distance = distance
+    if profile.ground_camera:
+        vertical = float(center[2] - profile.camera_height_m)
+        if vertical <= 0:
+            raise ValueError("Flight median must be above the ground camera")
+        # Maintain a physical above-ground viewpoint; zoom, not coordinate warping,
+        # preserves the requested framing when the original range is impossible.
+        distance = max(distance, vertical / np.sin(np.radians(55.)))
+        elevation = np.arcsin(vertical / distance)
+        forward = np.array([np.cos(elevation)*np.cos(azimuth),
+                            np.cos(elevation)*np.sin(azimuth), np.sin(elevation)])
+        fov = float(np.clip(np.degrees(2*np.arctan(reference_travel/(2*distance*span))),
+                            profile.ground_min_fov_deg, profile.fov_high_deg))
     height = 1440 if profile.aspect_4_3_probability and rng.random() < profile.aspect_4_3_probability else 1080
     camera = Camera(height=height, position=tuple(center-distance*forward), look_at=tuple(center), horizontal_fov_deg=fov)
     optical = []
+    if profile.wing_centroid_ratio and not {"wing_frequency_hz", "wing_phase_rad"} <= flight.keys():
+        raise ValueError("Wing observation needs explicit flight phase and frequency")
     for row in rows:
         bbox = camera.project(row["position_m"], flight["width_m"], flight["height_m"])
+        if (bbox is not None and profile.wing_centroid_ratio and flight["label"] == "bird"
+                and row["behavior"] == "flap_jitter"):
+            # A tracker may follow the changing wing silhouette rather than COM.
+            # The shift is bounded by a fraction of apparent wingspan in pixels.
+            phase = 2*np.pi*flight["wing_frequency_hz"]*row["frame_index"]/flight["fps"] + flight["wing_phase_rad"]
+            bbox["cy"] += (profile.wing_centroid_ratio*bbox["w"]*camera.width/camera.height)*np.sin(phase)
         optical.append(dict(frame_index=row["frame_index"], timestamp_ms=row["timestamp_ms"], conf=1., **bbox)
                        if camera.visible(bbox) else None)
     expected = int(round(flight["duration_s"]*flight["fps"]))+1
@@ -236,6 +268,8 @@ def observe_flight(flight, profile):
                               simulator=SEQUENCE_SIMULATOR_VERSION, acquisition=asdict(profile),
                               camera=camera.to_dict(), requested_two_second_span=span,
                               camera_distance_m=distance, schedule=flight["schedule"],
+                              requested_camera_distance_m=requested_distance,
+                              actual_elevation_deg=float(np.degrees(elevation)),
                               guidance=flight.get("guidance", asdict(GuidanceProfile())),
                               template=flight["template"], latent_failure=flight["latent_failure"],
                               observation=noise, framing="fixed camera centered on latent median; no image warping"),
