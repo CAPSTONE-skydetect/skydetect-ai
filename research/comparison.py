@@ -39,6 +39,11 @@ def compare_domains(synthetic, real, seed=42):
         return dict(status="no_accepted_real_tracks")
     if sim.empty or sim.feature_config_id.iloc[0] != obs.feature_config_id.iloc[0]:
         raise ValueError("Need synthetic data with matching feature configuration")
+    if "feature_contract_id" in sim or "feature_contract_id" in obs:
+        if "feature_contract_id" not in sim or "feature_contract_id" not in obs:
+            raise ValueError("Need matching real and synthetic feature contract provenance")
+        if sim.feature_contract_id.iloc[0] != obs.feature_contract_id.iloc[0]:
+            raise ValueError("Need synthetic data with matching feature contract")
     sim = sim[sim.split == "train"]
     # Calibration may guide simulator development; final test must stay untouched.
     review_counts = obs.review_status.value_counts().to_dict() if "review_status" in obs else {}

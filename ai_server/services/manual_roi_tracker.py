@@ -46,6 +46,7 @@ class PointObservation:
     h: float
     confidence: float
     visible: bool
+    lifecycle_state: str
     visible_points: int
     bg_points: int
     bg_inliers: int
@@ -141,19 +142,7 @@ def process_manual_roi_video(
         (init_bbox[2], init_bbox[3]),
     )
 
-    backward = _track_ordered_frames(
-        frame_items=list(reversed(frame_items[: init_frame_index + 1])),
-        init_points=init_points,
-        init_center=init_point,
-        init_bbox=init_bbox,
-        init_template=init_template,
-        fps=fps,
-        stabilize=stabilize,
-        direction="backward",
-        tuning=tuning,
-        foreground_mask=foreground.mask,
-    )
-    forward = _track_ordered_frames(
+    observations = _track_ordered_frames(
         frame_items=frame_items[init_frame_index:],
         init_points=init_points,
         init_center=init_point,
@@ -165,10 +154,21 @@ def process_manual_roi_video(
         tuning=tuning,
         foreground_mask=foreground.mask,
     )
-    observations = sorted(
-        [*reversed(backward[1:]), *forward],
-        key=lambda observation: observation.frame_index,
+
+    last_visible_frame = max(
+        observation.frame_index for observation in observations if observation.visible
     )
+    exit_confirmed_frame = (
+        observations[-1].frame_index
+        if observations[-1].lifecycle_state == "EXITED"
+        else None
+    )
+    if exit_confirmed_frame is not None:
+        termination_reason = "exited_frame"
+    elif max_seconds is not None and observations[-1].frame_index < metadata_obj.frame_count - 1:
+        termination_reason = "max_duration"
+    else:
+        termination_reason = "end_of_video"
 
     track = observations_to_track_sequence(
         observations,
@@ -202,11 +202,35 @@ def process_manual_roi_video(
             "run_id": run_id,
             "source_video_id": source_video_id,
             "source_video_path": str(Path(video_path).expanduser()),
-            "num_frames_processed": len(frame_items),
+            "num_frames_loaded": len(frame_items),
+            "num_frames_processed": len(observations),
             "init_frame_index": init_frame_index,
+            "tracking_start_frame": init_frame_index,
+            "tracking_end_frame": last_visible_frame,
+            "last_visible_frame": last_visible_frame,
+            "exit_confirmed_frame": exit_confirmed_frame,
+            "termination_reason": termination_reason,
+            "attempted_frame_count": sum(
+                observation.lifecycle_state != "EXITED"
+                for observation in observations
+            ),
+            "visible_frame_count": sum(
+                observation.visible for observation in observations
+            ),
+            "lost_frame_count": sum(
+                observation.lifecycle_state == "LOST"
+                for observation in observations
+            ),
             "init_point_processed": [float(value) for value in init_point],
             "init_bbox_processed": [float(value) for value in init_bbox],
             "coordinate_mode": "camera_motion_compensated" if stabilize else "frame",
+            "timebase": {
+                "timestamp_source": "frame_index_and_average_fps",
+                "source_fps": fps,
+                "timestamp_unit": "ms",
+                "timestamp_resolution_ms": 1,
+                "variable_frame_rate_supported": False,
+            },
             "tracker_method": "manual_roi_klt_appearance_motion",
             "tracking_parameters": tuning.model_dump(),
             "foreground_mask_coverage": foreground.coverage,
@@ -225,7 +249,11 @@ def process_manual_roi_video(
         debug_dir / "observations.csv",
     )
     trajectory_path = write_tracking_csv(
-        [_trajectory_row(observation) for observation in observations],
+        [
+            _trajectory_row(observation)
+            for observation in observations
+            if observation.visible
+        ],
         run_dir / "trajectory.csv",
     )
 
@@ -303,6 +331,7 @@ def _track_ordered_frames(
             h=bbox_h,
             confidence=1.0,
             visible=True,
+            lifecycle_state="ACTIVE",
             visible_points=len(points),
             bg_points=0,
             bg_inliers=0,
@@ -320,6 +349,7 @@ def _track_ordered_frames(
 
     prev_gray = first_gray
     prev_center = np.array(center, dtype=np.float32)
+    outside_streak = 0
     for frame_index, frame in frame_items[1:]:
         curr_gray = _gray(frame)
         if stabilize:
@@ -336,13 +366,18 @@ def _track_ordered_frames(
             current_to_reference = np.eye(3, dtype=np.float32)
             bg_stats = {"points": 0, "inliers": 0, "inlier_ratio": 1.0}
 
-        next_points, status, error = cv2.calcOpticalFlowPyrLK(
-            prev_gray,
-            curr_gray,
-            points.reshape(-1, 1, 2),
-            None,
-            **_lk_params(),
-        )
+        if len(points):
+            next_points, status, error = cv2.calcOpticalFlowPyrLK(
+                prev_gray,
+                curr_gray,
+                points.reshape(-1, 1, 2),
+                None,
+                **_lk_params(),
+            )
+        else:
+            next_points = None
+            status = None
+            error = None
         predicted_compensated = motion_filter.predict()
         predicted_center = np.array(
             transform_point(
@@ -353,7 +388,9 @@ def _track_ordered_frames(
             dtype=np.float32,
         )
         next_points_2d = (
-            points.copy() if next_points is None else next_points.reshape(-1, 2)
+            np.empty((0, 2), dtype=np.float32)
+            if next_points is None
+            else next_points.reshape(-1, 2)
         )
         good = _good_point_mask(
             next_points_2d,
@@ -449,8 +486,13 @@ def _track_ordered_frames(
             1.0 + 0.20 * lost_streak,
         )
 
+        predicted_center_inside_frame = _point_inside_frame(
+            (float(predicted_center[0]), float(predicted_center[1])),
+            width=width,
+            height=height,
+        )
         motion_match = None
-        if not visible or low_contrast:
+        if (not visible or low_contrast) and predicted_center_inside_frame:
             motion_match = find_residual_motion(
                 prev_gray,
                 curr_gray,
@@ -496,7 +538,7 @@ def _track_ordered_frames(
             else:
                 visible = False
 
-        if not visible:
+        if not visible and predicted_center_inside_frame:
             appearance_match = appearance_model.search(
                 curr_gray,
                 tuple(float(value) for value in predicted_center),
@@ -573,15 +615,25 @@ def _track_ordered_frames(
                 )
                 visible = False
 
+        if visible and not _bbox_intersects_frame(
+            (float(new_center[0]), float(new_center[1])),
+            (bbox_w, bbox_h),
+            width=width,
+            height=height,
+        ):
+            visible = False
+            tracking_source = "prediction"
+
         lost_streak = 0 if visible else lost_streak + 1
-        new_center = np.array(
-            _clamp_point(
-                (float(new_center[0]), float(new_center[1])),
-                width=width,
-                height=height,
-            ),
-            dtype=np.float32,
+        outside_now = not _point_inside_frame(
+            (float(new_center[0]), float(new_center[1])),
+            width=width,
+            height=height,
         )
+        outside_streak = outside_streak + 1 if not visible and outside_now else 0
+        lifecycle_state = "ACTIVE" if visible else "LOST"
+        if outside_streak >= tuning.exit_confirmation_frames:
+            lifecycle_state = "EXITED"
         if tracking_source == "klt" and visible_points >= 4:
             spread_w, spread_h = _point_spread_size(
                 next_points_2d[good],
@@ -652,6 +704,7 @@ def _track_ordered_frames(
                 h=float(bbox_h),
                 confidence=confidence,
                 visible=visible,
+                lifecycle_state=lifecycle_state,
                 visible_points=visible_points,
                 bg_points=int(bg_stats["points"]),
                 bg_inliers=int(bg_stats["inliers"]),
@@ -667,6 +720,12 @@ def _track_ordered_frames(
             )
         )
 
+        if lifecycle_state == "EXITED":
+            for observation in observations[-outside_streak:]:
+                if not observation.visible:
+                    observation.lifecycle_state = "EXITED"
+            break
+
         if visible:
             motion_filter.correct((float(comp_x), float(comp_y)))
         current_bbox = (
@@ -675,12 +734,15 @@ def _track_ordered_frames(
             float(bbox_w),
             float(bbox_h),
         )
-        points = _initialize_roi_points(
-            curr_gray,
-            _clamp_bbox(current_bbox, width=width, height=height),
-            fallback_center=(float(new_center[0]), float(new_center[1])),
-            local_mask=foreground_mask,
-        )
+        if visible:
+            points = _initialize_roi_points(
+                curr_gray,
+                _clamp_bbox(current_bbox, width=width, height=height),
+                fallback_center=(float(new_center[0]), float(new_center[1])),
+                local_mask=foreground_mask,
+            )
+        else:
+            points = np.empty((0, 2), dtype=np.float32)
         prev_center = new_center
         prev_gray = curr_gray
 
@@ -830,15 +892,20 @@ def _compute_metrics(
     *,
     stabilize: bool,
 ) -> dict[str, Any]:
-    visible = [observation for observation in observations if observation.visible]
+    attempted = [
+        observation
+        for observation in observations
+        if observation.lifecycle_state != "EXITED"
+    ]
+    visible = [observation for observation in attempted if observation.visible]
     visible_count = len(visible)
-    missing_ratio = 1.0 - visible_count / max(len(observations), 1)
+    missing_ratio = 1.0 - visible_count / max(len(attempted), 1)
     mean_confidence = (
         sum(observation.confidence for observation in visible) / visible_count
         if visible
         else 0.0
     )
-    transitions = observations[1:]
+    transitions = attempted[1:]
     if stabilize and transitions:
         background_ratio: float | None = sum(
             observation.bg_inlier_ratio for observation in transitions
@@ -850,17 +917,17 @@ def _compute_metrics(
         background_ratio = None
         background_valid_ratio = None
 
-    raw_points = [(observation.raw_x, observation.raw_y) for observation in observations]
+    raw_points = [(observation.raw_x, observation.raw_y) for observation in visible]
     compensated_points = [
         (observation.compensated_x, observation.compensated_y)
-        for observation in observations
+        for observation in visible
     ]
     compensated_jumps = _jump_count(compensated_points)
-    length_score = min(1.0, len(observations) / 70.0)
+    length_score = min(1.0, len(attempted) / 70.0)
     visible_score = 1.0 - missing_ratio
     smooth_score = max(
         0.0,
-        1.0 - compensated_jumps / max(len(observations) * 0.08, 1.0),
+        1.0 - compensated_jumps / max(len(visible) * 0.08, 1.0),
     )
     if stabilize:
         quality_score = (
@@ -880,15 +947,22 @@ def _compute_metrics(
 
     source_counts = {
         source: sum(
-            1 for observation in observations if observation.tracking_source == source
+            1 for observation in attempted if observation.tracking_source == source
         )
         for source in ["manual_roi", "klt", "appearance", "motion", "prediction"]
     }
     return {
-        "num_frames_processed": len(observations),
+        "num_frames_processed": len(attempted),
+        "num_debug_observations": len(observations),
         "visible_frames": visible_count,
-        "visible_ratio": visible_count / max(len(observations), 1),
+        "visible_ratio": visible_count / max(len(attempted), 1),
         "missing_ratio": missing_ratio,
+        "tracking_state_counts": {
+            state: sum(
+                observation.lifecycle_state == state for observation in observations
+            )
+            for state in ["ACTIVE", "LOST", "EXITED"]
+        },
         "mean_observation_confidence": mean_confidence,
         "background_inlier_ratio": background_ratio,
         "background_valid_ratio": background_valid_ratio,
@@ -899,19 +973,19 @@ def _compute_metrics(
             else 0.0
         ),
         "appearance_model_updates": sum(
-            1 for observation in observations if observation.appearance_model_updated
+            1 for observation in attempted if observation.appearance_model_updated
         ),
         "low_contrast_frames": sum(
-            1 for observation in observations if observation.foreground_contrast < 0.20
+            1 for observation in attempted if observation.foreground_contrast < 0.20
         ),
         "mean_foreground_contrast": sum(
-            observation.foreground_contrast for observation in observations
+            observation.foreground_contrast for observation in attempted
         )
-        / max(len(observations), 1),
+        / max(len(attempted), 1),
         "mean_motion_score": sum(
-            observation.motion_score for observation in observations
+            observation.motion_score for observation in attempted
         )
-        / max(len(observations), 1),
+        / max(len(attempted), 1),
         "raw_jump_count": _jump_count(raw_points),
         "compensated_jump_count": compensated_jumps,
         "raw_motion_extent_px": _motion_extent(raw_points),
@@ -936,7 +1010,9 @@ def _write_overlay(
         width=width,
         height=height,
     )
-    trail: list[tuple[int, int]] = []
+    trail_segments: list[list[tuple[int, int]]] = []
+    current_trail: list[tuple[int, int]] = []
+    previous_visible_frame: int | None = None
     try:
         for frame_index, frame in frame_items:
             canvas = frame.copy()
@@ -950,25 +1026,35 @@ def _write_overlay(
                     "prediction": (0, 140, 255),
                 }.get(observation.tracking_source, (0, 220, 255))
                 if observation.visible:
-                    trail.append(
+                    if (
+                        previous_visible_frame is None
+                        or frame_index != previous_visible_frame + 1
+                    ):
+                        current_trail = []
+                        trail_segments.append(current_trail)
+                    current_trail.append(
                         (int(round(observation.raw_x)), int(round(observation.raw_y)))
                     )
-                if len(trail) >= 2:
-                    cv2.polylines(
-                        canvas,
-                        [np.array(trail, dtype=np.int32).reshape(-1, 1, 2)],
-                        False,
-                        color,
-                        2,
-                        cv2.LINE_AA,
-                    )
-                x1 = int(round(observation.raw_x - observation.w / 2.0))
-                y1 = int(round(observation.raw_y - observation.h / 2.0))
-                x2 = int(round(observation.raw_x + observation.w / 2.0))
-                y2 = int(round(observation.raw_y + observation.h / 2.0))
-                cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
+                    previous_visible_frame = frame_index
+                for trail in trail_segments:
+                    if len(trail) >= 2:
+                        cv2.polylines(
+                            canvas,
+                            [np.array(trail, dtype=np.int32).reshape(-1, 1, 2)],
+                            False,
+                            color,
+                            2,
+                            cv2.LINE_AA,
+                        )
+                if observation.visible:
+                    x1 = int(round(observation.raw_x - observation.w / 2.0))
+                    y1 = int(round(observation.raw_y - observation.h / 2.0))
+                    x2 = int(round(observation.raw_x + observation.w / 2.0))
+                    y2 = int(round(observation.raw_y + observation.h / 2.0))
+                    cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 2)
                 label = (
-                    f"f{frame_index} {observation.tracking_source} "
+                    f"f{frame_index} {observation.lifecycle_state} "
+                    f"{observation.tracking_source} "
                     f"conf={observation.confidence:.2f} "
                     f"app={observation.appearance_score:.2f} "
                     f"motion={observation.motion_score:.2f}"
@@ -1262,6 +1348,31 @@ def _clamp_point(
     )
 
 
+def _bbox_intersects_frame(
+    center: tuple[float, float],
+    size: tuple[float, float],
+    *,
+    width: int,
+    height: int,
+) -> bool:
+    half_width = max(float(size[0]), 0.0) / 2.0
+    half_height = max(float(size[1]), 0.0) / 2.0
+    left = float(center[0]) - half_width
+    right = float(center[0]) + half_width
+    top = float(center[1]) - half_height
+    bottom = float(center[1]) + half_height
+    return right > 0.0 and bottom > 0.0 and left < width and top < height
+
+
+def _point_inside_frame(
+    point: tuple[float, float],
+    *,
+    width: int,
+    height: int,
+) -> bool:
+    return 0.0 <= float(point[0]) < width and 0.0 <= float(point[1]) < height
+
+
 def _median_point(points: np.ndarray) -> tuple[float, float]:
     return float(np.median(points[:, 0])), float(np.median(points[:, 1]))
 
@@ -1331,6 +1442,7 @@ def _debug_row(observation: PointObservation) -> dict[str, Any]:
         "background_inliers": observation.bg_inliers,
         "background_inlier_ratio": observation.bg_inlier_ratio,
         "direction": observation.direction,
+        "lifecycle_state": observation.lifecycle_state,
         "forward_backward_error": observation.fb_error,
         "template_score": observation.template_score,
     }
@@ -1350,6 +1462,7 @@ def _trajectory_row(observation: PointObservation) -> dict[str, Any]:
         "bbox_height": observation.h,
         "confidence": observation.confidence,
         "visible": observation.visible,
+        "lifecycle_state": observation.lifecycle_state,
         "tracking_source": observation.tracking_source,
         "appearance_score": observation.appearance_score,
         "foreground_contrast": observation.foreground_contrast,

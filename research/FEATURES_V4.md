@@ -14,6 +14,22 @@ speed_i = norm(velocity_i)
 
 `speed_median`과 가속도는 각각 `pixel/s`, `pixel/s^2` 단위의 apparent image-plane motion이다. 실제 물리 속도나 거리 보정 속도가 아니다.
 
+서버 추론에서는 기존 1920×1080 학습 데이터와 절대 단위를 맞추기 위해
+`fhd_width_1920_v1` 좌표 정책을 사용한다. A의 처리 폭이 `W`이면 B는
+`scale = 1920 / W`를 적용한 것과 동일하게 `image_width=1920`,
+`image_height=processed_height * scale`로 변환한다. 따라서 720p, 1080p,
+4K의 동일한 정규화 궤적은 같은 속도·가속도 피쳐를 만든다. 종횡비는 늘이거나
+찌그러뜨리지 않으며, 16:9가 아닌 입력은 현재 품질 메타데이터에 경고 상태로 남긴다.
+
+시간축은 `timestamp_ms`가 우선이며 각 연속 구간은 기본 30Hz로 재표본화된다.
+A가 생성하는 현재 timestamp는 고정 프레임 레이트와 평균 FPS를 전제로 하므로,
+가변 프레임 레이트 영상은 정확한 presentation timestamp 지원 전까지 제한사항이다.
+
+`feature_config_id`는 특징 계산식 설정만 식별한다. 운영 좌표·시간축 정책까지
+추적하기 위해 별도의 `feature_contract_id`를 사용하며, runtime `FeatureVector`,
+합성 CSV/manifest, 실제 A 궤적 import 결과에 같은 식별자를 기록한다. 비16:9
+입력은 현재 거부하지 않고 `aspect_ratio_matches_training=false` 경고로 남긴다.
+
 ## 특징 계약
 
 | 특징 | 정의 | 해석 |

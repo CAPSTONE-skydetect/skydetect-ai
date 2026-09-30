@@ -32,6 +32,13 @@ def test_dataset_roundtrip_split_disjoint_and_no_silent_retries(batch):
     validate_table(parsed)
     manifest = json.loads((path / "manifest.json").read_text())
     assert manifest["calibration_status"] == "uncalibrated_no_real_A"
+    assert manifest["feature_contract"]["coordinate_policy"] == "fhd_width_1920_v1"
+    assert (
+        manifest["feature_contract"]["timebase_policy"]
+        == "timestamp_ms_priority_30hz_resample_v1"
+    )
+    assert table.feature_contract_id.nunique() == 1
+    assert table.coordinate_policy.unique().tolist() == ["fhd_width_1920_v1"]
     samples = list(read_jsonl(path / "raw_trajectories_v4.jsonl"))
     assert len(samples) == len(table)
     for first, second in zip(samples[::2], samples[1::2]):
@@ -93,7 +100,7 @@ def real_fixture(tmp_path):
     write_json(tmp_path / "track.json", track)
     entry = dict(track_path="track.json", source_group_id="original-session-1", label="drone",
                  split="calibration", coordinate_space="post_cmc_residual_observation",
-                 frame_width=1920, frame_height=1080, review_status="approved")
+                 review_status="approved")
     write_json(tmp_path / "manifest.json", {"videos": [entry]})
     return sample, entry
 
@@ -104,13 +111,36 @@ def test_real_import_shares_feature_code_and_provenance(tmp_path):
     assert diagnostics[0]["feature_result"] == sample["feature_result"]
     assert table.family_id.iloc[0] == "real:original-session-1"
     assert table.a_missing_ratio.iloc[0] == sample["track"]["quality"]["missing_ratio"]
+    assert table.feature_contract_id.iloc[0] == sample["metadata"]["feature_contract_id"]
+
+
+def test_real_import_uses_same_full_hd_canonical_policy_as_runtime(tmp_path):
+    sample, _ = real_fixture(tmp_path)
+    reference = sample["feature_result"]["features"]
+    resized_track = sample["track"]
+    resized_track["processed_width"] = 1280
+    resized_track["processed_height"] = 720
+    resized_track["stabilization"] = {
+        "applied": True,
+        "method": "opencv_feature_cmc",
+    }
+    write_json(tmp_path / "track.json", resized_track)
+
+    table, diagnostics = RealTrackVerifier().import_manifest(tmp_path / "manifest.json")
+
+    assert table.iloc[0][FEATURE_COLUMNS].to_dict() == pytest.approx(reference)
+    quality = diagnostics[0]["feature_result"]["quality"]
+    assert quality["coordinate_scale"] == pytest.approx(1.5)
+    assert quality["canonical_width"] == 1920.0
+    assert quality["canonical_height"] == 1080.0
 
 
 @pytest.mark.parametrize("error", ["resolution", "unstabilized", "split", "duplicate"])
 def test_real_import_rejects_ambiguous_contract(tmp_path, error):
     sample, entry = real_fixture(tmp_path)
     if error == "resolution":
-        del entry["frame_width"]
+        del sample["track"]["processed_width"]
+        write_json(tmp_path / "track.json", sample["track"])
     elif error == "unstabilized":
         sample["track"]["stabilization"]["applied"] = False
         write_json(tmp_path / "track.json", sample["track"])
@@ -159,6 +189,21 @@ def test_grouped_comparison_detects_injected_shift_and_no_shift(batch):
         assert min(result["domain_classifier"]["fold_balanced_accuracy"]) > .9
 
 
+def test_domain_comparison_rejects_feature_contract_mismatch(batch):
+    _, synthetic = batch
+    real = synthetic[
+        (synthetic.split == "train") & (synthetic.feature_status == "accepted")
+    ].copy()
+    real["split"] = "calibration"
+    real["sample_id"] = "real:" + real.sample_id
+    real["family_id"] = "real:" + real.family_id
+    real["review_status"] = "approved"
+    real["feature_contract_id"] = "different-contract"
+
+    with pytest.raises(ValueError, match="feature contract"):
+        compare_domains(synthetic, real)
+
+
 def test_real_holdout_requires_manual_review(batch):
     _, synthetic = batch
     real = synthetic[synthetic.split == "test"].copy()
@@ -168,6 +213,9 @@ def test_real_holdout_requires_manual_review(batch):
     real["review_status"] = "approved"
     result = evaluate_dataset(synthetic, real_table=real)
     assert result["real_holdout"]["reviewed_test_rows"] > 0
+    real["feature_contract_id"] = "different-contract"
+    with pytest.raises(ValueError, match="feature contracts differ"):
+        evaluate_dataset(synthetic, real_table=real)
 
 
 def test_single_class_slice_does_not_claim_two_class_accuracy():

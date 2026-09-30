@@ -40,6 +40,7 @@ class Environment:
         if self.x_goal.shape != (3,) or not np.isfinite(self.x_goal).all():
             raise ValueError("Goal must be a finite 3D position")
         self.updraft = 0.
+        self.command_velocity = None
 
     @property
     def h_star(self):
@@ -245,6 +246,8 @@ class TrajectoryGenerator:
         if not observations:
             raise ValueError("No visible observations; use BatchRunner to retain rejection diagnostics")
         return {"track_id": track_id, "history": observations,
+                "processed_width": self.env.camera.width,
+                "processed_height": self.env.camera.height,
                 "source_video_id": f"synthetic-{seed}", "quality": metadata["quality"]}
 
     def save(self, data, filename=None):

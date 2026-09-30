@@ -129,7 +129,12 @@ class QuadBody:
 
     def step(self, agent, disturbance):
         c = self.c
-        target_velocity = limit(c["position_gain"]*(agent.env.x_goal-agent.pos), min(agent.s_star*agent.speed_scale, c["max_speed"]))
+        command = getattr(agent.env, "command_velocity", None)
+        requested_velocity = (c["position_gain"]*(agent.env.x_goal-agent.pos)
+                              if command is None else np.asarray(command, dtype=float))
+        if requested_velocity.shape != (3,) or not np.isfinite(requested_velocity).all():
+            raise ValueError("Velocity command must be a finite world-frame 3-vector")
+        target_velocity = limit(requested_velocity, min(agent.s_star*agent.speed_scale, c["max_speed"]))
         requested = limit(c["k_a"]*(target_velocity-agent.v_ground)+disturbance, agent.a_max)
         self.command_accel += limit(requested-self.command_accel, c["jerk_max"]*agent.dt)
         steps = int(np.ceil(agent.dt/agent.integration_step_s))

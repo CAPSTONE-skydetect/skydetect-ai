@@ -74,7 +74,7 @@ def _weighted_quantile(values, weights, quantile):
     return float(np.interp(quantile, cumulative / cumulative[-1], values[order]))
 
 
-def extract_features(history, image_width, image_height, fps=None, config=None):
+def extract_features(history, image_width, image_height, fps=None, config=None, *, diagnostics=None):
     """Return an explicit rejection, never replace an invalid feature with zero.
 
     Timestamp milliseconds take precedence over fps; fps is only an explicit
@@ -82,6 +82,9 @@ def extract_features(history, image_width, image_height, fps=None, config=None):
     Positions are converted to pixels, but bbox dimensions never enter a feature
     formula. Speeds therefore describe apparent image-plane motion, not physical
     world speed or range-corrected motion.
+
+    An optional caller-owned diagnostics list receives segment arrays only on
+    success. It does not alter preprocessing, feature values or the contract.
     """
     cfg = config or FeatureConfig()
     result = dict(feature_version=FEATURE_VERSION, feature_config_id=cfg.fingerprint,
@@ -132,6 +135,7 @@ def extract_features(history, image_width, image_height, fps=None, config=None):
             raise ValueError("resampling_limit_exceeded")
         segments = np.split(np.arange(len(frame)), boundaries)
         velocity, accel, turns, curvature = [], [], [], []
+        diagnostic_segments = []
         tortuosity, lengths, retained = [], [], 0
         direction_candidates, direction_supported = 0, 0
         direction_duration = 0.
@@ -176,6 +180,15 @@ def extract_features(history, image_width, image_height, fps=None, config=None):
             valid_turn = (speed[:-1] >= speed_floor) & (speed[1:] >= speed_floor)
             reliable = np.linalg.norm(pixel_velocity, axis=1) > direction_floor
             valid_turn &= reliable[:-1] & reliable[1:]
+            if diagnostics is not None:
+                diagnostic_segments.append(dict(
+                    observed_indices=indices.copy(), time_seconds=grid.copy(),
+                    resampled_xy_px=raw_xy.copy(), smoothed_xy_px=xy.copy(),
+                    velocity_px_s=pixel_velocity.copy(), speed_px_s=speed.copy(),
+                    turn_rate_rad_s=angular_rate.copy(), valid_turn=valid_turn.copy(),
+                    direction_floor_px_s=float(direction_floor), smoothing_window=window,
+                    step_seconds=step,
+                ))
             direction_candidates += len(valid_turn)
             direction_supported += int(valid_turn.sum())
             direction_duration += len(angular_rate)*step
@@ -233,6 +246,8 @@ def extract_features(history, image_width, image_height, fps=None, config=None):
                                   heading_valid_fraction=direction_supported/max(direction_candidates, 1),
                                   retained_duration_seconds=sum(lengths),
                                   training_length_group="short" if sum(lengths) < 2. else "standard")
+        if diagnostics is not None:
+            diagnostics.extend(diagnostic_segments)
     except (ValueError, TypeError, KeyError, IndexError) as error:
         result["reasons"].append(str(error))
     return result

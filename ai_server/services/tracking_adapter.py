@@ -48,11 +48,17 @@ def observations_to_track_sequence(
         raise ValueError("tracking produced no visible observations")
 
     attempted_frame_count = len(
-        {observation.frame_index for observation in observations}
+        {
+            observation.frame_index
+            for observation in observations
+            if getattr(observation, "lifecycle_state", "ACTIVE") != "EXITED"
+        }
     )
     return TrackSequence(
         track_id=track_id,
         source_video_id=source_video_id,
+        processed_width=frame_width,
+        processed_height=frame_height,
         stabilization=StabilizationInfo(
             applied=stabilize,
             method="opencv_feature_cmc" if stabilize else "none",

@@ -27,6 +27,12 @@ class TrackingVideoMetadata:
     processed_height: int
 
     def to_dict(self) -> dict[str, Any]:
+        scale_x = self.processed_width / self.width
+        scale_y = self.processed_height / self.height
+        resize_applied = (
+            self.processed_width != self.width
+            or self.processed_height != self.height
+        )
         return {
             "video_name": self.video_name,
             "fps": self.fps,
@@ -36,6 +42,20 @@ class TrackingVideoMetadata:
             "duration_sec": self.duration_sec,
             "processed_width": self.processed_width,
             "processed_height": self.processed_height,
+            "preprocessing": {
+                "mode": "resize" if resize_applied else "none",
+                "scale_x": scale_x,
+                "scale_y": scale_y,
+                "pad_x": 0.0,
+                "pad_y": 0.0,
+                "crop_x": 0.0,
+                "crop_y": 0.0,
+            },
+            "original_to_processed": [
+                [scale_x, 0.0, 0.0],
+                [0.0, scale_y, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
         }
 
 

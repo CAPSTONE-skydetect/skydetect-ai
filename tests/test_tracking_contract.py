@@ -37,6 +37,8 @@ def test_adapter_emits_only_observed_points_and_preserves_gaps() -> None:
     )
 
     assert [point.frame_index for point in track.history] == [0, 2]
+    assert track.processed_width == 200
+    assert track.processed_height == 100
     assert track.history[0].cx == pytest.approx(0.45)
     assert track.history[0].cy == pytest.approx(0.35)
     assert track.quality is not None
@@ -74,7 +76,40 @@ def test_track_sequence_rejects_duplicate_or_unordered_frames() -> None:
         conf=0.9,
     )
     with pytest.raises(ValidationError, match="strictly ordered"):
-        TrackSequence(track_id=1, history=[point, point])
+        TrackSequence(
+            track_id=1,
+            processed_width=200,
+            processed_height=100,
+            history=[point, point],
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("processed_width", 0), ("processed_height", 0)],
+)
+def test_track_sequence_rejects_invalid_processed_resolution(
+    field: str,
+    value: int,
+) -> None:
+    point = TrackPoint(
+        frame_index=0,
+        timestamp_ms=0,
+        cx=0.5,
+        cy=0.5,
+        w=0.1,
+        h=0.1,
+        conf=0.9,
+    )
+    payload = {
+        "track_id": 1,
+        "processed_width": 200,
+        "processed_height": 100,
+        "history": [point],
+    }
+    payload[field] = value
+    with pytest.raises(ValidationError):
+        TrackSequence(**payload)
 
 
 def test_manual_tracking_request_validates_bbox_and_tuning() -> None:

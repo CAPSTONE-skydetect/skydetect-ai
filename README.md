@@ -114,6 +114,7 @@ curl -X POST http://127.0.0.1:8000/analyze \
       "recovery_conf": 0.58,
       "update_conf": 0.76,
       "search_radius_multiplier": 2.5,
+      "exit_confirmation_frames": 3,
       "online_update_enabled": false
     }
   }'
@@ -121,3 +122,8 @@ curl -X POST http://127.0.0.1:8000/analyze \
 
 Runtime artifacts are written below `artifacts/manual_tracks/` by default. Set
 `SKYDETECT_TRACK_OUTPUT_DIR` to override that location.
+
+Part B computes runtime trajectory features in the canonical
+`fhd_width_1920_v1` coordinate space. A may still track a Full HD or 4K source
+at 1280px width; B uniformly maps the normalized trajectory back to a
+1920px-wide coordinate system before calculating pixel/s and pixel/s² features.

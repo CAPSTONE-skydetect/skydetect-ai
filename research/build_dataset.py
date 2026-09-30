@@ -86,13 +86,13 @@ def _row(sample, split):
     row = {key: meta[key] for key in (
         "sample_id", "family_id", "label", "subtype", "scenario", "behavior_mode",
         "observation_profile", "frame_count", "simulator_version", "feature_version",
-        "requested_depth_mode", "fps", "seed")}
+        "feature_config_id", "feature_contract_id", "coordinate_policy",
+        "timebase_policy", "requested_depth_mode", "fps", "seed")}
     row.update(split=split,
                attempted_missing_fraction=meta["observation"]["quality"]["missing_ratio"],
                camera_residual_enabled=meta["observation"]["camera_motion"]["enabled"],
                tracking_drift_enabled=meta["observation"]["tracking_drift"]["enabled"],
                feature_status=feature["feature_status"],
-               feature_config_id=feature["feature_config_id"],
                rejection_reason=";".join(feature["reasons"]),
                **{name: (feature["features"] or {}).get(name) for name in FEATURE_COLUMNS},
                **quality)
@@ -154,6 +154,7 @@ def build_dataset(output_dir, train_count=8000, test_count=2000, seed=20260906,
     source_files = sorted(Path(__file__).resolve().parent.glob("*.py"))
     manifest = dict(simulator_version=SIMULATOR_VERSION, feature_version=FEATURE_VERSION,
                     feature_config=asdict(runner.feature_config), feature_config_id=runner.feature_config.fingerprint,
+                    feature_contract=runner.feature_contract,
                     noise_config=asdict(runner.noise_config), seed=seed, paired=paired,
                     train_rows=len(train), test_rows=len(test), train_class_counts=train.label.value_counts().to_dict(),
                     test_class_counts=test.label.value_counts().to_dict(), families_per_scenario=families_per_scenario,
