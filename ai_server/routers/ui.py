@@ -40,7 +40,8 @@ UPLOAD_DIR = Path(os.environ.get("SKYDETECT_UPLOAD_DIR", "storage/uploads"))
 OUTPUT_DIR = Path(
     os.environ.get("SKYDETECT_TRACK_OUTPUT_DIR", "artifacts/manual_tracks")
 )
-SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
+# .mpg/.mpeg (MPEG-1/2) 는 브라우저가 재생 못 해 업로드 시 H.264 mp4 로 변환된다.
+SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".mpg", ".mpeg"}
 
 
 @router.post("/videos/upload")
