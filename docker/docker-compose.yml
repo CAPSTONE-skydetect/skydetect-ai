@@ -1,0 +1,82 @@
+# SkyDetect 전체 스택(MySQL + 백엔드 + AI + 프론트)을 한 번에 띄운다.
+#
+# 전제: 세 저장소가 같은 상위 폴더 아래 형제로 있어야 한다.
+#   <상위>/skydetect-ai        (이 파일이 있는 저장소)
+#   <상위>/skydetect-backend
+#   <상위>/skydetect-frontend
+#
+# 실행 (이 docker/ 폴더에서):
+#   cp .env.example .env   # 최초 1회, 값 채우기
+#   docker compose up -d --build
+#   브라우저: http://localhost:5173
+#
+# 자세한 내용은 README.md 참고.
+
+name: skydetect
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: skydetect
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      TZ: Asia/Seoul
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      # 호스트의 로컬 MySQL(3306)과 겹치지 않게 3307 로 연다
+      - "${MYSQL_HOST_PORT:-3307}:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  backend:
+    build: ../../skydetect-backend
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/skydetect?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
+      SPRING_DATASOURCE_USERNAME: ${DB_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+      SKYDETECT_AUTH_INITIAL_OPERATOR_USERNAME: ${OPERATOR_USERNAME}
+      SKYDETECT_AUTH_INITIAL_OPERATOR_PASSWORD: ${OPERATOR_PASSWORD}
+      SPRINGDOC_API_DOCS_ENABLED: "true"
+      SPRINGDOC_SWAGGER_UI_ENABLED: "true"
+      TZ: Asia/Seoul
+    ports:
+      - "${BACKEND_HOST_PORT:-8080}:8080"
+
+  ai:
+    build: ..
+    environment:
+      SKYDETECT_UPLOAD_DIR: /app/storage/uploads
+      SKYDETECT_TRACK_OUTPUT_DIR: /app/artifacts/manual_tracks
+    volumes:
+      # 업로드/산출물은 호스트 폴더에 남겨서 로컬 실행 때와 공유한다
+      - ../storage:/app/storage
+      - ../artifacts:/app/artifacts
+      - ../models:/app/models
+    ports:
+      - "${AI_HOST_PORT:-8000}:8000"
+
+  frontend:
+    build:
+      context: ../../skydetect-frontend
+      args:
+        VITE_CLIP_SOURCE: ${VITE_CLIP_SOURCE:-mock}
+        VITE_ANALYSIS_SOURCE: ${VITE_ANALYSIS_SOURCE:-ai}
+        VITE_HLS_URL: ${VITE_HLS_URL:-/mock/hls/live.m3u8}
+    depends_on:
+      - backend
+      - ai
+    ports:
+      - "${FRONTEND_HOST_PORT:-5173}:80"
+
+volumes:
+  mysql-data:
