@@ -25,9 +25,13 @@ def _make_video(path, codec_args, frames=45):
 
 
 def _codec_and_frames(path):
+    # 헤더의 프레임 수는 컨테이너에 따라 추정값이다 (.mpg 는 길이 × fps).
+    # 추적기가 실제로 읽는 수와 비교해야 하므로 끝까지 디코딩해서 센다.
     capture = cv2.VideoCapture(str(path))
     fourcc = int(capture.get(cv2.CAP_PROP_FOURCC))
-    frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    frames = 0
+    while capture.read()[0]:
+        frames += 1
     capture.release()
     return "".join(chr((fourcc >> 8 * i) & 0xFF) for i in range(4)), frames
 
@@ -58,6 +62,21 @@ def test_avi_is_transcoded_to_mp4_and_original_removed(tmp_path):
     assert result.transcoded is True
     assert result.path == tmp_path / "clip.mp4"
     assert not source.exists()
+
+
+def test_mpg_program_stream_is_transcoded_to_mp4(tmp_path):
+    source = tmp_path / "clip.mpg"
+    _make_video(source, ["-c:v", "mpeg2video", "-f", "mpeg"])
+    _, original_frames = _codec_and_frames(source)
+
+    result = ensure_browser_playable(source)
+
+    assert result.transcoded is True
+    assert result.path == tmp_path / "clip.mp4"
+    assert not source.exists()
+    codec, frames = _codec_and_frames(result.path)
+    assert codec in {"avc1", "h264"}
+    assert frames == original_frames
 
 
 def test_h264_yuv420p_mp4_is_left_untouched(tmp_path):
