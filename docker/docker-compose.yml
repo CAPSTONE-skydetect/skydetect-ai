@@ -1,7 +1,9 @@
 # SkyDetect 전체 스택(MySQL + 백엔드 + AI + 프론트)을 한 번에 띄운다.
 #
-# 전제: 세 저장소가 같은 상위 폴더 아래 형제로 있어야 한다.
-#   <상위>/skydetect-ai        (이 파일이 있는 저장소)
+# 전제: 세 저장소와 모델 브랜치 worktree 가 같은 상위 폴더 아래 형제로 있어야 한다.
+#   <상위>/skydetect-ai             (이 파일이 있는 저장소)
+#   <상위>/skydetect-ai-rf          (git worktree, model/rf)
+#   <상위>/skydetect-ai-minirocket  (git worktree, model/minirocket)
 #   <상위>/skydetect-backend
 #   <상위>/skydetect-frontend
 #
@@ -52,18 +54,28 @@ services:
     ports:
       - "${BACKEND_HOST_PORT:-8080}:8080"
 
-  ai:
-    build: ..
-    environment:
+  # 판정 모델별 AI 서버. 두 모델은 이 저장소의 서로 다른 브랜치라 서버도 따로 띄운다.
+  # 빌드 위치는 각 브랜치를 체크아웃한 git worktree 다 (README.md 참고).
+  # 프론트 상단 토글이 /ai(RF) 와 /ai-minirocket 중 어디로 보낼지 고른다.
+  ai-rf:
+    build: ${AI_RF_DIR:-../../skydetect-ai-rf}
+    environment: &ai-env
       SKYDETECT_UPLOAD_DIR: /app/storage/uploads
       SKYDETECT_TRACK_OUTPUT_DIR: /app/artifacts/manual_tracks
-    volumes:
-      # 업로드/산출물은 호스트 폴더에 남겨서 로컬 실행 때와 공유한다
+    volumes: &ai-volumes
+      # 업로드/산출물은 두 서버가 같은 호스트 폴더를 쓴다.
+      # 모델 파일은 각 브랜치 이미지에 들어 있는 것을 쓰므로 마운트하지 않는다.
       - ../storage:/app/storage
       - ../artifacts:/app/artifacts
-      - ../models:/app/models
     ports:
-      - "${AI_HOST_PORT:-8000}:8000"
+      - "${AI_RF_HOST_PORT:-8000}:8000"
+
+  ai-minirocket:
+    build: ${AI_MINIROCKET_DIR:-../../skydetect-ai-minirocket}
+    environment: *ai-env
+    volumes: *ai-volumes
+    ports:
+      - "${AI_MINIROCKET_HOST_PORT:-8001}:8000"
 
   frontend:
     build:
@@ -74,7 +86,8 @@ services:
         VITE_HLS_URL: ${VITE_HLS_URL:-/mock/hls/live.m3u8}
     depends_on:
       - backend
-      - ai
+      - ai-rf
+      - ai-minirocket
     ports:
       - "${FRONTEND_HOST_PORT:-5173}:80"
 
