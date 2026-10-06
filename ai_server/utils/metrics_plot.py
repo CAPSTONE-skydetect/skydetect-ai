@@ -200,7 +200,8 @@ def trend_chart(title: str, points: list[dict], path: str | Path) -> Path:
         ci = points[i].get("ci")
         if ci:
             ax.plot([i, i], ci, color=METRIC, lw=1.4, alpha=0.6, zorder=2)
-        ax.text(i, f1[i] + 0.07, f"{f1[i]:.3f}", ha="center", fontsize=11, fontweight="bold", color=INK)
+        ax.text(i + 0.07, f1[i], f"{f1[i]:.3f}", ha="left", va="center", fontsize=11,
+                fontweight="bold", color=INK)
     recall = [p.get("drone_recall") for p in points]
     has_r = [i for i, v in enumerate(recall) if v is not None]
     if has_r:
