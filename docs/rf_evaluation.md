@@ -1,5 +1,9 @@
 # RF 분류기 성능 평가
 
+> **2026-10-06 갱신:** `docs/rf_metrics.json`, `docs/images/rf_evaluation.png`, `docs/images/rf_card.png`
+> 는 피처 v4(9종) 재평가 결과다 (accuracy 0.7255, macro-F1 0.7253, 95% CI 0.703–0.748).
+> 아래 본문의 상세 수치·분석은 피처 v3(11종) 기준이다. 실험 이력은 GitHub 이슈의 RF 평가 기록을 본다.
+
 Part C의 RandomForest bird/drone 분류기에 대한 학습·평가 절차와 확정 지표를 기록한다.
 
 ## 실행 방법

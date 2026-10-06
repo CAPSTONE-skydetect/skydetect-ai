@@ -22,13 +22,16 @@ import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
+    balanced_accuracy_score,
     classification_report,
     confusion_matrix,
+    f1_score,
     roc_auc_score,
     roc_curve,
 )
 from sklearn.model_selection import GroupKFold, cross_val_score
 
+from ai_server.utils.metrics_plot import experiment_card
 from ai_server.services.train import (
     FEATURE_NAMES,
     MIN_SAMPLES_LEAF,
@@ -184,6 +187,47 @@ def _plot(
     plt.close(fig)
 
 
+def _family_bootstrap_ci(
+    y_true: np.ndarray, y_pred: np.ndarray, groups: np.ndarray, draws: int = 2000
+) -> dict[str, list[float]]:
+    """family 단위로 재표집한 macro-F1 / balanced accuracy 95% 구간.
+
+    같은 family 의 샘플은 서로 닮아 있어 샘플 단위로 뽑으면 구간이 과하게 좁아진다.
+    """
+    rng = np.random.default_rng(20260928)
+    families = np.unique(groups)
+    index = {family: np.flatnonzero(groups == family) for family in families}
+    f1s, bals = [], []
+    for _ in range(draws):
+        rows = np.concatenate([index[f] for f in rng.choice(families, len(families))])
+        f1s.append(f1_score(y_true[rows], y_pred[rows], average="macro"))
+        bals.append(balanced_accuracy_score(y_true[rows], y_pred[rows]))
+    interval = lambda v: [round(float(np.quantile(v, 0.025)), 4), round(float(np.quantile(v, 0.975)), 4)]
+    return {"draws": draws, "macro_f1": interval(f1s), "balanced_accuracy": interval(bals)}
+
+
+def plot_card(report: dict[str, Any], path: Path, title: str = "RandomForest") -> Path:
+    """혼동행렬 / 종합 지표(95% CI) / 클래스별 정밀도·재현율 카드 한 장."""
+    holdout = report["holdout"]
+    per_class = holdout["per_class"]
+    provenance = report["dataset"].get("provenance", {})
+    arm = dict(
+        name=f"{report['model']['n_features']}개 특징",
+        n_label=f"test {report['dataset']['test_rows']:,}개 · family {report['dataset']['test_families']}개",
+        cm=holdout["confusion_matrix"]["matrix"],
+        accuracy=holdout["accuracy"],
+        balanced_accuracy=holdout.get("balanced_accuracy"),
+        macro_f1=per_class["macro avg"]["f1-score"],
+        roc_auc=holdout["roc_auc"],
+        precision={label: per_class[label]["precision"] for label in ("bird", "drone")},
+        recall={label: per_class[label]["recall"] for label in ("bird", "drone")},
+        ci=holdout.get("bootstrap_95ci", {}),
+    )
+    subtitle = (f"합성 test · 시뮬레이터 {provenance.get('simulator_version', '?')} / "
+                f"피처 {provenance.get('feature_version', '?')} · 실제 성능 아님")
+    return experiment_card(title, subtitle, [arm], path)
+
+
 def evaluate(
     train_path: str = _DEFAULT_TRAIN_PATH,
     test_path: str = _DEFAULT_TEST_PATH,
@@ -211,6 +255,8 @@ def evaluate(
     cm = confusion_matrix(y_test, y_pred, labels=classes)
     per_class = classification_report(y_test, y_pred, output_dict=True, digits=4)
     roc_auc = roc_auc_score(y_binary, proba)
+    balanced_accuracy = balanced_accuracy_score(y_test, y_pred)
+    bootstrap = _family_bootstrap_ci(y_test, y_pred, test_df[_GROUP_COLUMN].to_numpy())
     pr_auc = average_precision_score(y_binary, proba)
 
     # train 내부 교차검증. family 단위로 나눠 같은 궤적 계열이 양쪽에 걸치지 않게 한다.
@@ -245,6 +291,8 @@ def evaluate(
         },
         "holdout": {
             "accuracy": round(float(accuracy), 4),
+            "balanced_accuracy": round(float(balanced_accuracy), 4),
+            "bootstrap_95ci": {k: v for k, v in bootstrap.items() if k != "draws"},
             "roc_auc": round(float(roc_auc), 4),
             "pr_auc": round(float(pr_auc), 4),
             "per_class": {
@@ -269,6 +317,7 @@ def evaluate(
     _plot(
         out_dir, cm, classes, accuracy, y_binary, proba, roc_auc, importance, segments
     )
+    plot_card(report, out_dir / "card.png")
 
     return report
 
@@ -285,6 +334,7 @@ def publish(report_dir: str = _DEFAULT_REPORT_DIR) -> None:
 
     shutil.copy2(source / "report.png", docs_dir / "images" / "rf_evaluation.png")
     shutil.copy2(source / "metrics.json", docs_dir / "rf_metrics.json")
+    shutil.copy2(source / "card.png", docs_dir / "images" / "rf_card.png")
     print(f"확정본 승격: {docs_dir / 'images' / 'rf_evaluation.png'}")
     print(f"확정본 승격: {docs_dir / 'rf_metrics.json'}")
 
@@ -297,6 +347,8 @@ def _print_summary(report: dict[str, Any]) -> None:
     print("홀드아웃 테스트셋 평가")
     print(f"{'=' * 52}")
     print(f"  accuracy : {holdout['accuracy']:.4f}")
+    print(f"  balanced : {holdout['balanced_accuracy']:.4f}")
+    print(f"  F1 95% CI: {holdout['bootstrap_95ci']['macro_f1']}")
     print(f"  F1 (macro): {holdout['per_class']['macro avg']['f1-score']:.4f}")
     print(f"  ROC-AUC  : {holdout['roc_auc']:.4f}")
     print(f"  PR-AUC   : {holdout['pr_auc']:.4f}")
