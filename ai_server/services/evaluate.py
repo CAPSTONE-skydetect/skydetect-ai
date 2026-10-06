@@ -21,6 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ai_server.utils.metrics_plot import experiment_card
 from ai_server.services.sequence_model import (
     ALPHA_SOURCE,
     ARMS,
@@ -107,8 +108,33 @@ def evaluate(
     )
     (report_dir / "metrics.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     (report_dir / "REPORT.md").write_text(_markdown(report), encoding="utf-8")
+    plot_card(report, report_dir / "card.png")
     print(f"리포트 저장: {report_dir}")
     return report
+
+
+_ARM_KO = {"real_only": "실제-only", "real_plus_augmentation": "실제+증강", "synthetic_only": "합성-only"}
+
+
+def plot_card(report: dict, path: Path, title: str = "MiniRocket + Ridge") -> Path:
+    """세 학습 구성을 원본 영상 그룹 단위 카드 한 장으로 그린다."""
+    arms = []
+    for arm, row in report["results"].items():
+        group = row["validation"]["group"]
+        boot = row["group_bootstrap"]
+        arms.append(dict(
+            name=_ARM_KO.get(arm, arm),
+            n_label=f"영상 {group['n']}개 · 학습 {row['train_windows']:,}창",
+            cm=group["confusion_matrix"],
+            accuracy=group["accuracy"], balanced_accuracy=group["balanced_accuracy"],
+            macro_f1=group["macro_f1"], roc_auc=group["roc_auc"],
+            precision=group["precision"], recall=group["recall"],
+            ci=dict(macro_f1=boot["macro_f1_95ci"], balanced_accuracy=boot["balanced_accuracy_95ci"]),
+            coverage=group.get("abstain", {}).get("coverage"),
+        ))
+    subtitle = (f"실제 A validation · 원본 영상 그룹 단위 · 창 {report['validation']['windows']}개 · "
+                "반복 사용된 개발 자료 (최종 성능 아님)")
+    return experiment_card(title, subtitle, arms, path)
 
 
 def _errors(groups) -> list[dict]:
@@ -159,6 +185,8 @@ def publish(report_dir: Path = _DEFAULT_REPORT_DIR) -> None:
     """검토한 실행 결과를 docs/ 확정본으로 복사한다. 지표 변화가 커밋 diff 로 드러난다."""
     shutil.copy2(report_dir / "metrics.json", _DOCS_DIR / "minirocket_metrics.json")
     shutil.copy2(report_dir / "REPORT.md", _DOCS_DIR / "minirocket_evaluation.md")
+    (_DOCS_DIR / "images").mkdir(exist_ok=True)
+    shutil.copy2(report_dir / "card.png", _DOCS_DIR / "images" / "minirocket_evaluation.png")
     print(f"확정본 승격: {_DOCS_DIR / 'minirocket_metrics.json'}, {_DOCS_DIR / 'minirocket_evaluation.md'}")
 
 

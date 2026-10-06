@@ -28,6 +28,7 @@ from sklearn.metrics import (
     balanced_accuracy_score,
     confusion_matrix,
     f1_score,
+    precision_score,
     recall_score,
     roc_auc_score,
 )
@@ -230,6 +231,8 @@ def metrics(table: pd.DataFrame, margin_threshold: float = 0.0) -> dict:
         accuracy=float(accuracy_score(truth, predicted)),
         balanced_accuracy=float(balanced_accuracy_score(truth, predicted)),
         macro_f1=float(f1_score(truth, predicted, labels=LABELS, average="macro", zero_division=0)),
+        precision=dict(zip(LABELS, precision_score(
+            truth, predicted, labels=LABELS, average=None, zero_division=0).tolist())),
         recall=dict(zip(LABELS, recall_score(
             truth, predicted, labels=LABELS, average=None, zero_division=0).tolist())),
         roc_auc=float(roc_auc_score(truth == "drone", decisions)) if len(set(truth)) == 2 else None,

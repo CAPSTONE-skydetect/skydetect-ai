@@ -20,6 +20,6 @@
 
 ## 추론 지연
 
-- real_only: 첫 호출 1.6 ms, 준비 후 창당 0.521 ms
-- real_plus_augmentation: 첫 호출 1.6 ms, 준비 후 창당 0.52 ms
-- synthetic_only: 첫 호출 1.6 ms, 준비 후 창당 0.585 ms
+- real_only: 첫 호출 1.8 ms, 준비 후 창당 0.549 ms
+- real_plus_augmentation: 첫 호출 1.7 ms, 준비 후 창당 0.588 ms
+- synthetic_only: 첫 호출 1.9 ms, 준비 후 창당 0.577 ms

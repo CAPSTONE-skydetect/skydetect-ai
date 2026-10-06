@@ -22,7 +22,8 @@ A TrackSequence (CMC 보정, stabilization.applied=true)
 | --- | --- |
 | `ai_server/services/sequence_model.py` | 패키지 검증 로드, 모델 생성, alpha CV, 집계, 지표 (학습·평가·추론 공통) |
 | `ai_server/services/train.py` | 운영 모델 학습 → `models/minirocket_classifier.joblib` |
-| `ai_server/services/evaluate.py` | 세 학습 구성 비교 → `reports/minirocket/`, `--publish` 시 `docs/` |
+| `ai_server/services/evaluate.py` | 세 학습 구성 비교 → `reports/minirocket/` (지표 + 카드 이미지), `--publish` 시 `docs/` |
+| `ai_server/utils/metrics_plot.py` | 혼동행렬·지표·정밀도/재현율 카드와 추이 그래프 (이슈 기록용) |
 | `ai_server/services/classifier.py` | `MiniRocketClassifier`: TrackSequence 추론 |
 | `ai_server/services/prediction.py` | 응답(`PredictionResult`) 조립 |
 | `ai_server/routers/classify.py` | `POST /classify` |

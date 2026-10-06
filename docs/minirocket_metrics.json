@@ -33,6 +33,10 @@
           "accuracy": 0.8135593220338984,
           "balanced_accuracy": 0.8114942528735632,
           "macro_f1": 0.8100673105062921,
+          "precision": {
+            "bird": 0.9090909090909091,
+            "drone": 0.7567567567567568
+          },
           "recall": {
             "bird": 0.6896551724137931,
             "drone": 0.9333333333333333
@@ -54,6 +58,10 @@
           "accuracy": 0.8181818181818182,
           "balanced_accuracy": 0.8571428571428572,
           "macro_f1": 0.8166666666666667,
+          "precision": {
+            "bird": 1.0,
+            "drone": 0.6666666666666666
+          },
           "recall": {
             "bird": 0.7142857142857143,
             "drone": 1.0
@@ -75,6 +83,10 @@
           "accuracy": 0.9,
           "balanced_accuracy": 0.9166666666666667,
           "macro_f1": 0.898989898989899,
+          "precision": {
+            "bird": 1.0,
+            "drone": 0.8
+          },
           "recall": {
             "bird": 0.8333333333333334,
             "drone": 1.0
@@ -111,8 +123,8 @@
         }
       ],
       "latency_ms": {
-        "first_call": 1.6,
-        "per_window_warm": 0.521
+        "first_call": 1.8,
+        "per_window_warm": 0.549
       }
     },
     "real_plus_augmentation": {
@@ -126,6 +138,10 @@
           "accuracy": 0.864406779661017,
           "balanced_accuracy": 0.8626436781609195,
           "macro_f1": 0.8624708624708625,
+          "precision": {
+            "bird": 0.9565217391304348,
+            "drone": 0.8055555555555556
+          },
           "recall": {
             "bird": 0.7586206896551724,
             "drone": 0.9666666666666667
@@ -147,6 +163,10 @@
           "accuracy": 0.9090909090909091,
           "balanced_accuracy": 0.9285714285714286,
           "macro_f1": 0.905982905982906,
+          "precision": {
+            "bird": 1.0,
+            "drone": 0.8
+          },
           "recall": {
             "bird": 0.8571428571428571,
             "drone": 1.0
@@ -168,6 +188,10 @@
           "accuracy": 0.9,
           "balanced_accuracy": 0.9166666666666667,
           "macro_f1": 0.898989898989899,
+          "precision": {
+            "bird": 1.0,
+            "drone": 0.8
+          },
           "recall": {
             "bird": 0.8333333333333334,
             "drone": 1.0
@@ -204,8 +228,8 @@
         }
       ],
       "latency_ms": {
-        "first_call": 1.6,
-        "per_window_warm": 0.52
+        "first_call": 1.7,
+        "per_window_warm": 0.588
       }
     },
     "synthetic_only": {
@@ -219,6 +243,10 @@
           "accuracy": 0.576271186440678,
           "balanced_accuracy": 0.5787356321839081,
           "macro_f1": 0.5683347966052092,
+          "precision": {
+            "bird": 0.5526315789473685,
+            "drone": 0.6190476190476191
+          },
           "recall": {
             "bird": 0.7241379310344828,
             "drone": 0.43333333333333335
@@ -240,6 +268,10 @@
           "accuracy": 0.5454545454545454,
           "balanced_accuracy": 0.5357142857142857,
           "macro_f1": 0.5299145299145299,
+          "precision": {
+            "bird": 0.6666666666666666,
+            "drone": 0.4
+          },
           "recall": {
             "bird": 0.5714285714285714,
             "drone": 0.5
@@ -261,6 +293,10 @@
           "accuracy": 0.6,
           "balanced_accuracy": 0.5833333333333333,
           "macro_f1": 0.5833333333333333,
+          "precision": {
+            "bird": 0.6666666666666666,
+            "drone": 0.5
+          },
           "recall": {
             "bird": 0.6666666666666666,
             "drone": 0.5
@@ -312,8 +348,8 @@
         }
       ],
       "latency_ms": {
-        "first_call": 1.6,
-        "per_window_warm": 0.585
+        "first_call": 1.9,
+        "per_window_warm": 0.577
       }
     }
   }
