@@ -402,6 +402,7 @@ class PredictionResult(StrictModel):
         windows_used (int): 판정에 쓴 2초 창 수
         window_scores (list[float]): 창별 margin
         window_rejections (dict[str, int]): 제외한 창의 사유별 개수
+        window_starts_s (list[float]): 창별 시작 시각 (track 첫 관측 기준 초). 판정 근거 표시용
         model_version (str): 전처리 계약 버전 + 계약 ID + 학습 구성
         quality (TrackQuality | None): A가 보낸 track 품질 요약 그대로
         processing_time_ms (int | None): 처리 시간(ms)
@@ -417,6 +418,7 @@ class PredictionResult(StrictModel):
     windows_used: int = Field(default=0, ge=0)
     window_scores: list[float] = Field(default_factory=list)
     window_rejections: dict[str, int] = Field(default_factory=dict)
+    window_starts_s: list[float] = Field(default_factory=list)
     model_version: str
     quality: TrackQuality | None = None
     processing_time_ms: int | None = Field(default=None, ge=0, description="FastAPI 내부 처리 시간 (ms)")
@@ -427,6 +429,8 @@ class PredictionResult(StrictModel):
             raise ValueError("abstain_reason is required exactly when label='uncertain'")
         if self.windows_used != len(self.window_scores):
             raise ValueError("windows_used must match window_scores")
+        if self.window_starts_s and len(self.window_starts_s) != len(self.window_scores):
+            raise ValueError("window_starts_s must match window_scores")
         return self
 
 

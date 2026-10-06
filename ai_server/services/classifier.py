@@ -33,6 +33,8 @@ class SequencePrediction:
     abstain_detail: str | None = None
     window_scores: list[float] = field(default_factory=list)
     window_rejections: dict[str, int] = field(default_factory=dict)
+    # 창 시작 시각 (track 첫 관측 기준, 초). window_scores 와 같은 순서다.
+    window_starts_s: list[float] = field(default_factory=list)
 
 
 class MiniRocketClassifier:
@@ -86,6 +88,7 @@ class MiniRocketClassifier:
         result = SequencePrediction(
             "drone" if mean >= 0 else "bird", mean,
             window_scores=[float(s) for s in scores], window_rejections=rejections,
+            window_starts_s=[float(w["relative_start_s"]) for w in windows],
         )
         if abs(mean) < margin_threshold:
             result.label = "uncertain"

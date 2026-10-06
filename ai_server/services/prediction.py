@@ -38,6 +38,7 @@ def classify_track_sequence(request: ClassifyRequest) -> PredictionResult:
         windows_used=len(result.window_scores),
         window_scores=result.window_scores,
         window_rejections=result.window_rejections,
+        window_starts_s=result.window_starts_s,
         model_version=classifier.version,
         quality=track.quality,
         processing_time_ms=int((time.perf_counter() - start) * 1000),

@@ -84,6 +84,17 @@ def test_long_gap_windows_are_excluded_not_zero_filled():
     assert gapped.window_rejections.get("long_gap", 0) > 0
 
 
+def test_window_start_times_follow_scores_and_skip_rejected_windows():
+    full = _classify(_track(5.0))
+    assert full.window_starts_s == [0.0, 1.0, 2.0]
+
+    full6 = _classify(_track(6.0))
+    gapped = _classify(_track(6.0, drop=(60, 75)))
+    assert len(gapped.window_starts_s) == len(gapped.window_scores)
+    # 제외된 창의 시각은 빠지고, 남은 창의 시각만 원래 자리 그대로 남는다.
+    assert set(gapped.window_starts_s) < set(full6.window_starts_s)
+
+
 def test_margin_threshold_turns_weak_decision_into_low_separation():
     base = _classify(_track(5.0))
     gated = _classify(_track(5.0), margin_threshold=abs(base.decision_score) + 1.0)
