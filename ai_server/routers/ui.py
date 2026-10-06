@@ -15,6 +15,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
 from ai_server.schemas import ClassifyRequest
@@ -23,6 +24,10 @@ from ai_server.services.tracker import AnalyzePipelineError, execute_manual_trac
 from ai_server.services.tracking_video_io import (
     TrackingVideoError,
     read_tracking_video_metadata,
+)
+from ai_server.services.video_transcode import (
+    VideoTranscodeError,
+    ensure_browser_playable,
 )
 from ai_server.tracking_schemas import ManualTrackingRequest
 
@@ -52,8 +57,11 @@ async def upload_video(file: UploadFile = File(...)) -> dict[str, object]:
         with target.open("wb") as handle:
             while chunk := await file.read(1024 * 1024):
                 handle.write(chunk)
+        # 브라우저가 재생 못 하는 코덱이면 H.264 mp4 로 바꾼다. 추적도 이 파일로 한다.
+        converted = await run_in_threadpool(ensure_browser_playable, target)
+        target = converted.path
         metadata = read_tracking_video_metadata(target, resize_width=1280).to_dict()
-    except (OSError, TrackingVideoError) as exc:
+    except (OSError, TrackingVideoError, VideoTranscodeError) as exc:
         target.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
@@ -64,6 +72,9 @@ async def upload_video(file: UploadFile = File(...)) -> dict[str, object]:
         "source_video_id": target.stem,
         "video_path": str(target),
         "metadata": metadata,
+        # transcoded 면 화면은 올린 파일 대신 source_video 를 재생해야 한다.
+        "transcoded": converted.transcoded,
+        "original_codec": converted.original_codec,
         "download_urls": {"source_video": _download_url(target)},
     }
 
