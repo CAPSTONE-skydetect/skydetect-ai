@@ -71,6 +71,8 @@ def classify_feature_vector(
         )
 
     label, confidence = _classifier.predict(fv)
+    # 화면의 "판단 근거"용. 모델 전체 중요도(top_features)와 달리 이 궤적 한 건의 근거다.
+    explanation = _classifier.explain(fv)
 
     return PredictionResult(
         track_id=fv.track_id,
@@ -80,6 +82,8 @@ def classify_feature_vector(
         top_features=get_top_features(_classifier.clf, _classifier.feature_names),
         quality=quality,
         processing_time_ms=_elapsed_ms(start),
+        base_drone_proba=explanation.base_drone_proba,
+        feature_contributions=explanation.contributions,
     )
 
 

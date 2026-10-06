@@ -503,9 +503,13 @@ class PredictionResult(StrictModel):
         label (PredictionLabel): bird / drone / uncertain
         confidence (float): 예측 확률
         rule_filter (RuleFilterResult): 규칙 기반 필터 결과
-        top_features (dict[str, float]): 상대적 기여도가 큰 feature들
+        top_features (dict[str, float]): 상대적 기여도가 큰 feature들 (모델 전체 기준)
         quality (ResponseQuality): 품질 요약
         processing_time_ms (int | None): 처리 시간(ms)
+        base_drone_proba (float | None): 이 궤적의 판정 근거 - 트리 루트의 평균 드론 확률
+        feature_contributions (dict[str, float]): 이 궤적의 판정 근거 - 피처별 드론 확률 기여.
+            양수면 드론 쪽, 음수면 새 쪽. base_drone_proba + 합 = 드론 확률.
+            규칙 필터에서 탈락해 모델을 부르지 않았으면 비어 있다.
     """
 
     track_id: int = Field(..., ge=0)
@@ -515,6 +519,10 @@ class PredictionResult(StrictModel):
     top_features: dict[str, float] = Field(default_factory=dict, description="RF 중요도 기반 상위 특징")
     quality: ResponseQuality
     processing_time_ms: int | None = Field(default=None, ge=0, description="FastAPI 내부 처리 시간 (ms)")
+    base_drone_proba: float | None = Field(default=None, ge=0.0, le=1.0, description="기여 분해의 기준값")
+    feature_contributions: dict[str, float] = Field(
+        default_factory=dict, description="피처별 드론 확률 기여 (양수 = 드론 쪽)"
+    )
 
 
 class BatchPredictionResult(StrictModel):

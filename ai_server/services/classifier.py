@@ -6,6 +6,7 @@ import joblib
 import numpy as np
 
 from ai_server.schemas import FeatureVector, PredictionLabel
+from ai_server.services.rf_explain import RFExplanation, explain_rf
 
 _DEFAULT_MODEL_PATH = "models/rf_classifier.pkl"
 _CONFIDENCE_THRESHOLD = 0.6
@@ -50,6 +51,10 @@ class RFClassifier:
             return "uncertain", confidence
 
         return label, confidence  # type: ignore[return-value]
+
+    def explain(self, fv: FeatureVector) -> RFExplanation:
+        """이 궤적의 드론 확률을 기준값 + 피처별 기여로 나눈다 (판정 근거 표시용)."""
+        return explain_rf(self._clf, self._feature_names, self._to_array(fv))
 
     def _to_array(self, fv: FeatureVector) -> np.ndarray:
         """모델 번들의 feature_names 순서대로 값을 뽑아 입력 행렬을 만든다.
