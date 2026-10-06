@@ -12,7 +12,7 @@ contract:
 
 1. A: manual ROI intake, stabilization, tracking, and `TrackSequence` generation
 2. B: interpolation and feature extraction from track history
-3. C: classification, model training, and explanation helpers
+3. C: MiniRocket + Ridge trajectory-sequence classification, training, and evaluation
 
 The shared contract lives in `ai_server/schemas.py`.
 
@@ -37,14 +37,15 @@ skydetect-ai/
 │   │   ├── tracker.py                    # A: API pipeline orchestration
 │   │   ├── feature_core.py               # B: core motion feature extraction
 │   │   ├── feature_signal.py             # B: extended signal/fractal features
-│   │   ├── rule_filter.py                # C: rule-based pre-filter
-│   │   ├── classifier.py                 # C: classifier inference
-│   │   └── train.py                      # C: training entrypoint
+│   │   ├── sequence_model.py             # C: MiniRocket/Ridge shared core
+│   │   ├── classifier.py                 # C: TrackSequence inference
+│   │   ├── prediction.py                 # C: response assembly
+│   │   ├── train.py                      # C: training entrypoint
+│   │   └── evaluate.py                   # C: three-arm validation comparison
 │   ├── utils/
 │   │   ├── quality.py                    # A/B: track quality helpers
 │   │   ├── interpolate.py                # B: interpolation helpers
-│   │   ├── fractal.py                    # B: SBFD/LHFD helper functions
-│   │   └── explain.py                    # C: feature importance helpers
+│   │   └── fractal.py                    # B: SBFD/LHFD helper functions
 │   ├── models/                           # C: trained model artifacts
 │   └── docs/                             # Shared docs, examples, contracts
 ├── research/                             # B: personal experiments/validation
@@ -69,11 +70,12 @@ skydetect-ai/
   - `ai_server/utils/fractal.py`
 - C
   - `ai_server/routers/classify.py`
-  - `ai_server/services/rule_filter.py`
+  - `ai_server/services/sequence_model.py`
   - `ai_server/services/classifier.py`
+  - `ai_server/services/prediction.py`
   - `ai_server/services/train.py`
-  - `ai_server/utils/explain.py`
-  - `ai_server/models/`
+  - `ai_server/services/evaluate.py`
+  - `models/minirocket_classifier.joblib`
 - Shared
   - `ai_server/schemas.py`
   - `ai_server/utils/quality.py`
@@ -127,3 +129,16 @@ Part B computes runtime trajectory features in the canonical
 `fhd_width_1920_v1` coordinate space. A may still track a Full HD or 4K source
 at 1280px width; B uniformly maps the normalized trajectory back to a
 1920px-wide coordinate system before calculating pixel/s and pixel/s² features.
+
+## Part C: MiniRocket Classifier
+
+This branch replaces the former 9-feature Random Forest with
+MiniRocket + StandardScaler + RidgeClassifier on 2-second trajectory windows.
+See `docs/minirocket_classifier.md` for the contract, commands, and limits, and
+`docs/minirocket_evaluation.md` for the current development comparison.
+
+```bash
+# unpack real_reference_comparison_v1.zip into research/output/ first
+python -m ai_server.services.train      # -> models/minirocket_classifier.joblib
+python -m ai_server.services.evaluate   # -> reports/minirocket/
+```

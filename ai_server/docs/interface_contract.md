@@ -9,15 +9,20 @@ The current contract owner is `ai_server/schemas.py`.
 
 - A output: `TrackSequence`
 - B input: `TrackSequence`
-- B output: `FeatureVector`
-- C input: `FeatureVector`
-- C output: `PredictionResult`
+- B output: `FeatureVector` (9 summary features; no longer consumed by C)
+- B sequence contract: `research/trajectory_sequence.py`
+  (`trajectory-sequence-1.0.1`, 2 s / 30 Hz / 1 s stride, float32 `(N, 4, 60)`,
+  channels `q_x, q_y, d_x, d_y`)
+- C input: `ClassifyRequest.track_sequence` (`TrackSequence`); C windows it with
+  B's `window_track` so training and serving share one preprocessing function
+- C output: `PredictionResult` (`decision_score` is a Ridge margin, not a probability)
 
 ## Team Boundary
 
 - A: input intake, stabilization, detection, tracking, `TrackSequence` creation, quality summary
 - B: interpolation, normalization, trajectory and bbox-based feature extraction
-- C: Random Forest classification, importance summary, final response assembly
+- C: MiniRocket + StandardScaler + RidgeClassifier training/evaluation, window score
+  aggregation, abstain policy, final response assembly
 
 ## Current Proposal
 

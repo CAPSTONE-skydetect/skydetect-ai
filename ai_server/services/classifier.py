@@ -1,81 +1,94 @@
-"""Part C: RF 분류기 추론 모듈."""
+"""Part C: MiniRocket + Ridge 분류기 추론 모듈.
 
+TrackSequence 하나를 B의 trajectory_sequence.window_track 으로 2초 창들로 자르고,
+창별 Ridge margin 을 평균해 판정한다. 학습 패키지를 만든 함수와 같은 함수를 쓰므로
+학습용·서비스용 전처리가 갈리지 않는다.
+
+joblib 은 실행 가능한 직렬화이므로 신뢰하는 출처의 모델만 로드한다.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import joblib
 import numpy as np
 
-from ai_server.schemas import FeatureVector, PredictionLabel
+from ai_server.schemas import TrackSequence
+from ai_server.services.sequence_model import (
+    DEFAULT_MODEL_PATH,
+    check_bundle,
+    decision_scores,
+)
+from research.trajectory_sequence import SequenceConfig, window_track
 
-_DEFAULT_MODEL_PATH = "models/rf_classifier.pkl"
-_CONFIDENCE_THRESHOLD = 0.6
+
+@dataclass
+class SequencePrediction:
+    label: str
+    decision_score: float | None
+    abstain_reason: str | None = None
+    abstain_detail: str | None = None
+    window_scores: list[float] = field(default_factory=list)
+    window_rejections: dict[str, int] = field(default_factory=dict)
 
 
-class RFClassifier:
-    """학습된 RandomForest 모델을 로드하고 FeatureVector를 분류한다."""
+class MiniRocketClassifier:
+    """학습된 MiniRocket+scaler+Ridge 번들을 로드하고 TrackSequence 를 분류한다."""
 
-    def __init__(self, model_path: str = _DEFAULT_MODEL_PATH) -> None:
+    def __init__(self, model_path: str | Path = DEFAULT_MODEL_PATH) -> None:
         path = Path(model_path)
         if not path.exists():
             raise FileNotFoundError(
-                f"모델 파일을 찾을 수 없습니다: {model_path}\n"
+                f"모델 파일을 찾을 수 없습니다: {path}\n"
                 "먼저 python -m ai_server.services.train 을 실행하세요."
             )
-        bundle = joblib.load(path)
-        self._clf = bundle["model"]
-        self._feature_names: list[str] = bundle["feature_names"]
+        self._model = joblib.load(path)
+        check_bundle(self._model)
+        self._config = SequenceConfig()
+        # MiniRocket 은 numba JIT 이라 첫 호출이 느리다. 첫 요청이 그 비용을 떠안지 않게 미리 돌린다.
+        decision_scores(self._model, np.zeros((1, 4, self._config.samples), dtype=np.float32))
 
     @property
-    def feature_names(self) -> list[str]:
-        return self._feature_names
+    def model(self) -> dict:
+        return self._model
 
     @property
-    def clf(self):
-        return self._clf
+    def version(self) -> str:
+        m = self._model
+        return f"{m['contract_version']}/{m['contract_id']}/{m['arm']}/alpha={m['alpha']:g}"
 
-    def predict(self, fv: FeatureVector) -> tuple[PredictionLabel, float]:
-        """FeatureVector를 받아 (label, confidence)를 반환한다.
+    def predict(
+        self,
+        track: TrackSequence,
+        *,
+        margin_threshold: float = 0.0,
+        min_windows: int = 1,
+    ) -> SequencePrediction:
+        try:
+            windows, rejected = window_track(track.model_dump(mode="json"), self._config)
+        except (ValueError, KeyError, TypeError) as exc:
+            return SequencePrediction("uncertain", None, "invalid_input", str(exc))
 
-        confidence가 threshold 미만이면 "uncertain"을 반환한다.
-        """
-        X = self._to_array(fv)
-        proba = self._clf.predict_proba(X)[0]
-        classes: list[str] = list(self._clf.classes_)
-
-        best_idx = int(np.argmax(proba))
-        confidence = float(proba[best_idx])
-        label = classes[best_idx]
-
-        if confidence < _CONFIDENCE_THRESHOLD:
-            return "uncertain", confidence
-
-        return label, confidence  # type: ignore[return-value]
-
-    def _to_array(self, fv: FeatureVector) -> np.ndarray:
-        """모델 번들의 feature_names 순서대로 값을 뽑아 입력 행렬을 만든다.
-
-        피처 목록을 여기에 나열하지 않는 이유가 있다. 과거에는 5종을 하드코딩해
-        두었는데, 학습 쪽 피처가 바뀌어도 이 함수가 따라가지 않아 추론 시점에야
-        "X has 5 features, but RandomForestClassifier is expecting 11" 로 터졌다.
-        번들에 저장된 목록을 단일 진실 공급원으로 삼으면 피처가 바뀌어도
-        이 함수는 수정할 필요가 없다.
-        """
-        f = fv.features
-        assert f is not None
-
-        missing = [name for name in self._feature_names if not hasattr(f, name)]
-        if missing:
-            raise ValueError(
-                f"모델이 요구하는 피처가 TrackFeatures에 없습니다: {missing}\n"
-                f"모델 학습 피처: {self._feature_names}\n"
-                "models/rf_classifier.pkl 과 ai_server/schemas.py 의 버전이 어긋났습니다."
+        rejections = dict(Counter(r["reason"] for r in rejected))
+        if len(windows) < min_windows:
+            return SequencePrediction(
+                "uncertain", None, "insufficient_observation",
+                f"유효 2초 창 {len(windows)}개 < 최소 {min_windows}개",
+                window_rejections=rejections,
             )
 
-        values = [getattr(f, name) for name in self._feature_names]
-        if any(value is None for value in values):
-            none_fields = [
-                name for name, value in zip(self._feature_names, values) if value is None
-            ]
-            raise ValueError(f"피처 값이 None입니다: {none_fields}")
-
-        return np.array([values], dtype=float)
+        scores = decision_scores(self._model, np.stack([w["X"] for w in windows]))
+        # 창 점수를 평균해 긴 track 이 창 개수만큼 가산점을 받지 않게 한다.
+        mean = float(scores.mean())
+        result = SequencePrediction(
+            "drone" if mean >= 0 else "bird", mean,
+            window_scores=[float(s) for s in scores], window_rejections=rejections,
+        )
+        if abs(mean) < margin_threshold:
+            result.label = "uncertain"
+            result.abstain_reason = "low_separation"
+            result.abstain_detail = f"|margin| {abs(mean):.3f} < {margin_threshold:g}"
+        return result

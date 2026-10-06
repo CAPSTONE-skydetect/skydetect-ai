@@ -1,0 +1,320 @@
+{
+  "status": "development_comparison_only",
+  "package_manifest_sha256": "d5dbdd50a28f4113ca751cf12758f92788bc822f62eef5847f2c73ee54f50f8c",
+  "contract_version": "trajectory-sequence-1.0.1",
+  "contract_id": "eb9be8154ee0f404",
+  "validation": {
+    "windows": 59,
+    "groups": 10
+  },
+  "validation_previously_reused": true,
+  "independent_real_world_evaluation_ready": false,
+  "test_opened": false,
+  "score_is_probability": false,
+  "aggregation": "window margin mean per track, then track mean per source-video group",
+  "margin_threshold": 0.0,
+  "versions": {
+    "aeon": "1.6.0",
+    "numba": "0.63.1",
+    "numpy": "2.3.5",
+    "scikit-learn": "1.8.0",
+    "scipy": "1.17.1",
+    "joblib": "1.6.0"
+  },
+  "results": {
+    "real_only": {
+      "alpha": 0.1,
+      "representation_fit": "real_only",
+      "train_windows": 156,
+      "train_groups": 29,
+      "validation": {
+        "window": {
+          "n": 59,
+          "accuracy": 0.8135593220338984,
+          "balanced_accuracy": 0.8114942528735632,
+          "macro_f1": 0.8100673105062921,
+          "recall": {
+            "bird": 0.6896551724137931,
+            "drone": 0.9333333333333333
+          },
+          "roc_auc": 0.8666666666666667,
+          "confusion_matrix": [
+            [
+              20,
+              9
+            ],
+            [
+              2,
+              28
+            ]
+          ]
+        },
+        "track": {
+          "n": 11,
+          "accuracy": 0.8181818181818182,
+          "balanced_accuracy": 0.8571428571428572,
+          "macro_f1": 0.8166666666666667,
+          "recall": {
+            "bird": 0.7142857142857143,
+            "drone": 1.0
+          },
+          "roc_auc": 0.8928571428571429,
+          "confusion_matrix": [
+            [
+              5,
+              2
+            ],
+            [
+              0,
+              4
+            ]
+          ]
+        },
+        "group": {
+          "n": 10,
+          "accuracy": 0.9,
+          "balanced_accuracy": 0.9166666666666667,
+          "macro_f1": 0.898989898989899,
+          "recall": {
+            "bird": 0.8333333333333334,
+            "drone": 1.0
+          },
+          "roc_auc": 0.875,
+          "confusion_matrix": [
+            [
+              5,
+              1
+            ],
+            [
+              0,
+              4
+            ]
+          ]
+        }
+      },
+      "group_bootstrap": {
+        "draws": 1987,
+        "macro_f1_95ci": [
+          0.6703296703296704,
+          1.0
+        ],
+        "balanced_accuracy_95ci": [
+          0.75,
+          1.0
+        ]
+      },
+      "errors": [
+        {
+          "group_id": "group-fba48c3bb553e271",
+          "label": "bird",
+          "decision": 0.8514
+        }
+      ],
+      "latency_ms": {
+        "first_call": 1.6,
+        "per_window_warm": 0.521
+      }
+    },
+    "real_plus_augmentation": {
+      "alpha": 0.1,
+      "representation_fit": "real_only",
+      "train_windows": 6156,
+      "train_groups": 29,
+      "validation": {
+        "window": {
+          "n": 59,
+          "accuracy": 0.864406779661017,
+          "balanced_accuracy": 0.8626436781609195,
+          "macro_f1": 0.8624708624708625,
+          "recall": {
+            "bird": 0.7586206896551724,
+            "drone": 0.9666666666666667
+          },
+          "roc_auc": 0.9333333333333333,
+          "confusion_matrix": [
+            [
+              22,
+              7
+            ],
+            [
+              1,
+              29
+            ]
+          ]
+        },
+        "track": {
+          "n": 11,
+          "accuracy": 0.9090909090909091,
+          "balanced_accuracy": 0.9285714285714286,
+          "macro_f1": 0.905982905982906,
+          "recall": {
+            "bird": 0.8571428571428571,
+            "drone": 1.0
+          },
+          "roc_auc": 1.0,
+          "confusion_matrix": [
+            [
+              6,
+              1
+            ],
+            [
+              0,
+              4
+            ]
+          ]
+        },
+        "group": {
+          "n": 10,
+          "accuracy": 0.9,
+          "balanced_accuracy": 0.9166666666666667,
+          "macro_f1": 0.898989898989899,
+          "recall": {
+            "bird": 0.8333333333333334,
+            "drone": 1.0
+          },
+          "roc_auc": 1.0,
+          "confusion_matrix": [
+            [
+              5,
+              1
+            ],
+            [
+              0,
+              4
+            ]
+          ]
+        }
+      },
+      "group_bootstrap": {
+        "draws": 1987,
+        "macro_f1_95ci": [
+          0.6703296703296704,
+          1.0
+        ],
+        "balanced_accuracy_95ci": [
+          0.75,
+          1.0
+        ]
+      },
+      "errors": [
+        {
+          "group_id": "group-fba48c3bb553e271",
+          "label": "bird",
+          "decision": 0.4187
+        }
+      ],
+      "latency_ms": {
+        "first_call": 1.6,
+        "per_window_warm": 0.52
+      }
+    },
+    "synthetic_only": {
+      "alpha": 100.0,
+      "representation_fit": "synthetic_only",
+      "train_windows": 587,
+      "train_groups": 104,
+      "validation": {
+        "window": {
+          "n": 59,
+          "accuracy": 0.576271186440678,
+          "balanced_accuracy": 0.5787356321839081,
+          "macro_f1": 0.5683347966052092,
+          "recall": {
+            "bird": 0.7241379310344828,
+            "drone": 0.43333333333333335
+          },
+          "roc_auc": 0.628735632183908,
+          "confusion_matrix": [
+            [
+              21,
+              8
+            ],
+            [
+              17,
+              13
+            ]
+          ]
+        },
+        "track": {
+          "n": 11,
+          "accuracy": 0.5454545454545454,
+          "balanced_accuracy": 0.5357142857142857,
+          "macro_f1": 0.5299145299145299,
+          "recall": {
+            "bird": 0.5714285714285714,
+            "drone": 0.5
+          },
+          "roc_auc": 0.5,
+          "confusion_matrix": [
+            [
+              4,
+              3
+            ],
+            [
+              2,
+              2
+            ]
+          ]
+        },
+        "group": {
+          "n": 10,
+          "accuracy": 0.6,
+          "balanced_accuracy": 0.5833333333333333,
+          "macro_f1": 0.5833333333333333,
+          "recall": {
+            "bird": 0.6666666666666666,
+            "drone": 0.5
+          },
+          "roc_auc": 0.5416666666666666,
+          "confusion_matrix": [
+            [
+              4,
+              2
+            ],
+            [
+              2,
+              2
+            ]
+          ]
+        }
+      },
+      "group_bootstrap": {
+        "draws": 1987,
+        "macro_f1_95ci": [
+          0.2857142857142857,
+          0.8901098901098901
+        ],
+        "balanced_accuracy_95ci": [
+          0.25,
+          0.9166666666666667
+        ]
+      },
+      "errors": [
+        {
+          "group_id": "group-bc9f60f39f587180",
+          "label": "bird",
+          "decision": 0.7594
+        },
+        {
+          "group_id": "group-c29305e39602da00",
+          "label": "drone",
+          "decision": -0.0064
+        },
+        {
+          "group_id": "group-f772bea7233d63d4",
+          "label": "drone",
+          "decision": -0.7643
+        },
+        {
+          "group_id": "group-fba48c3bb553e271",
+          "label": "bird",
+          "decision": 1.199
+        }
+      ],
+      "latency_ms": {
+        "first_call": 1.6,
+        "per_window_warm": 0.585
+      }
+    }
+  }
+}

@@ -51,11 +51,10 @@ StabilizationMethod = Literal[
 TrackStability = Literal["good", "fair", "poor"]
 PredictionLabel = Literal["bird", "drone", "uncertain"]
 FeatureStatus = Literal["ok", "partial", "failed"]
-RejectReason = Literal[
-    "short_track",
-    "feature_error",
-    "high_noise",
-    "low_confidence",
+AbstainReason = Literal[
+    "invalid_input",            # 계약 위반: 비보정 입력, 시계 불일치, FPS 미달 등
+    "insufficient_observation", # 2초 창을 만들 관측이 부족 (짧은 track, 긴 gap)
+    "low_separation",           # |평균 margin| < margin_threshold
 ]
 
 
@@ -351,7 +350,7 @@ class FeatureVector(StrictModel):
 
 # =============================================================================
 # [파트 C] 분류 & 응답 — 담당: 강동규
-# FeatureVector를 입력받아 규칙 기반 필터 → RF 분류 → 응답 JSON 구성
+# TrackSequence → 2초 창(trajectory-sequence-1.0.1) → MiniRocket + Ridge → 응답 JSON
 # =============================================================================
 
 class ClassifyRequest(StrictModel):
@@ -362,128 +361,22 @@ class ClassifyRequest(StrictModel):
         Spring Boot → FastAPI classifier로 들어오는 입력 형식.
 
     왜 이렇게 했는가:
-        품질 threshold는 상황에 따라 override하고 싶을 수 있어서,
-        기본 feature_vector와 함께 선택적 threshold 파라미터를 받도록 했다.
+        MiniRocket은 요약 특징이 아니라 시간 순서가 있는 중심 좌표를 받는다.
+        그래서 B의 9개 요약 특징(FeatureVector) 대신 A의 TrackSequence를 그대로 받고,
+        2초 창 변환은 C가 B의 trajectory_sequence 구현을 그대로 호출해 수행한다.
+        학습용 전처리와 서비스용 전처리를 같은 함수로 묶어야 결과가 갈리지 않는다.
 
     필드:
-        feature_vector (FeatureVector): B가 만든 특징 패키지
-        min_track_length (int | None): 최소 유효 트랙 길이 override
-        min_mean_conf (float | None): 최소 평균 신뢰도 override
-        max_missing_ratio (float | None): 최대 누락 비율 override
+        track_sequence (TrackSequence): A가 만든 CMC 보정 후 추적 결과
+        margin_threshold (float): |평균 margin|이 이 값보다 작으면 uncertain (0이면 보류 없음)
+        min_windows (int): 판정에 필요한 최소 유효 창 수
     """
 
-    model_config = ConfigDict(
-        extra="forbid",
-        json_schema_extra={
-            "example": {
-                "feature_vector": {
-                    "track_id": 1,
-                    "feature_status": "ok",
-                    "features": {
-                        "speed_median": 74.67,
-                        "speed_cv": 0.21,
-                        "acceleration_median": 27.89,
-                        "acceleration_p95": 76.84,
-                        "turn_rate_median": 0.25,
-                        "turn_rate_p95": 0.94,
-                        "curvature_cv": 0.93,
-                        "tortuosity": 1.01,
-                        "heading_change_ratio": 0.19,
-                    },
-                    "quality": {
-                        "num_points": 10,
-                        "mean_conf": 0.9,
-                        "missing_ratio": 0.05,
-                        "track_stability": "good",
-                    },
-                    "imputed_fields": [],
-                },
-                "min_track_length": None,
-                "min_mean_conf": None,
-                "max_missing_ratio": None,
-            }
-        },
+    track_sequence: TrackSequence
+    margin_threshold: float = Field(
+        default=0.0, ge=0.0, description="|평균 margin| 보류 임계값. 확률 임계값이 아님"
     )
-
-    feature_vector: FeatureVector
-    min_track_length: int | None = Field(default=None, ge=1, description="최소 유효 트랙 길이")
-    min_mean_conf: float | None = Field(default=None, ge=0.0, le=1.0, description="최소 평균 탐지 신뢰도")
-    max_missing_ratio: float | None = Field(default=None, ge=0.0, le=1.0, description="최대 허용 누락 비율")
-
-
-class RuleFilterResult(StrictModel):
-    """
-    규칙 기반 필터 결과를 담는 모델.
-
-    한 줄 설명:
-        RF 추론 전에 track/feature 상태를 검사한 결과를 표현한다.
-
-    왜 이렇게 했는가:
-        품질이 너무 낮은 track는 굳이 RF에 넣기보다 uncertain으로 바로 처리하는 편이
-        더 안전하다. 그래서 reject reason을 명시적으로 남기도록 했다.
-
-    필드:
-        passed (bool): 필터 통과 여부
-        reject_reason (RejectReason | None): 실패 사유 코드
-    """
-
-    model_config = ConfigDict(
-        extra="forbid",
-        json_schema_extra={
-            "example": {"passed": False, "reject_reason": "short_track"},
-        },
-    )
-
-    passed: bool
-    reject_reason: RejectReason | None = None
-
-    @model_validator(mode="after")
-    def validate_reject_reason(self) -> "RuleFilterResult":
-        """
-        passed / reject_reason 조합의 논리 일관성을 검증한다.
-
-        한 줄 설명:
-            통과했으면 사유가 없어야 하고, 실패했으면 사유가 있어야 한다.
-
-        왜 이렇게 했는가:
-            passed=True인데 reject_reason이 채워져 있거나,
-            passed=False인데 이유가 비어 있으면 downstream이 해석하기 애매해진다.
-
-        Returns:
-            RuleFilterResult: 검증을 통과한 자기 자신
-
-        Raises:
-            ValueError: passed와 reject_reason 조합이 모순될 때
-        """
-        if self.passed and self.reject_reason is not None:
-            raise ValueError("reject_reason must be None when passed=True")
-        if not self.passed and self.reject_reason is None:
-            raise ValueError("reject_reason is required when passed=False")
-        return self
-
-
-class ResponseQuality(StrictModel):
-    """
-    최종 응답에 포함되는 품질 요약 블록.
-
-    한 줄 설명:
-        Spring Boot에 돌려줄 최소 품질 정보 묶음.
-
-    왜 이렇게 했는가:
-        응답에서도 A의 원래 naming인 num_points를 유지하면
-        중간 remapping drift를 줄일 수 있다.
-
-    필드:
-        num_points (int): 유효 프레임 수
-        mean_conf (float): 전체 프레임 평균 탐지 신뢰도
-        track_stability (TrackStability): track 품질 등급
-        feature_status (FeatureStatus): feature 계산 상태
-    """
-
-    num_points: int = Field(..., ge=0)
-    mean_conf: float = Field(..., ge=0.0, le=1.0, description="전체 프레임 평균 탐지 신뢰도")
-    track_stability: TrackStability
-    feature_status: FeatureStatus
+    min_windows: int = Field(default=1, ge=1, description="판정에 필요한 최소 유효 2초 창 수")
 
 
 class PredictionResult(StrictModel):
@@ -491,30 +384,50 @@ class PredictionResult(StrictModel):
     최종 분류 결과를 담는 모델.
 
     한 줄 설명:
-        C가 계산한 label / confidence / 품질 / 설명용 top feature를 함께 반환한다.
+        C가 계산한 label / decision_score / 보류 사유 / 창별 점수를 함께 반환한다.
 
     왜 이렇게 했는가:
-        단순 label만 반환하면 왜 uncertain이 되었는지, 어떤 품질 상태였는지,
-        어떤 feature가 상대적으로 중요했는지 알기 어렵다.
-        그래서 운영/디버깅/프론트 연동에 필요한 최소 정보를 함께 묶었다.
+        RidgeClassifier의 decision_function은 확률이 아니다. 0.73을 "드론 확률 73%"로
+        표시하면 안 되므로 confidence 대신 decision_score와 score_type을 반환한다.
+        양수는 drone, 음수는 bird 쪽이다. 보류(uncertain)는 이유를 구분해서 남긴다.
 
     필드:
         track_id (int): 대응 track 식별자
         label (PredictionLabel): bird / drone / uncertain
-        confidence (float): 예측 확률
-        rule_filter (RuleFilterResult): 규칙 기반 필터 결과
-        top_features (dict[str, float]): 상대적 기여도가 큰 feature들
-        quality (ResponseQuality): 품질 요약
+        decision_score (float | None): 창별 Ridge margin의 평균 (보류 사유가 입력 문제면 None)
+        score_type (str): 점수 종류. 항상 "ridge_margin_mean"
+        score_is_probability (bool): 항상 False
+        abstain_reason (AbstainReason | None): uncertain일 때 사유
+        abstain_detail (str | None): 사람이 읽는 보조 설명
+        windows_used (int): 판정에 쓴 2초 창 수
+        window_scores (list[float]): 창별 margin
+        window_rejections (dict[str, int]): 제외한 창의 사유별 개수
+        model_version (str): 전처리 계약 버전 + 계약 ID + 학습 구성
+        quality (TrackQuality | None): A가 보낸 track 품질 요약 그대로
         processing_time_ms (int | None): 처리 시간(ms)
     """
 
     track_id: int = Field(..., ge=0)
     label: PredictionLabel
-    confidence: float = Field(..., ge=0.0, le=1.0, description="RF 예측 확률 (uncertain 시 0.0)")
-    rule_filter: RuleFilterResult
-    top_features: dict[str, float] = Field(default_factory=dict, description="RF 중요도 기반 상위 특징")
-    quality: ResponseQuality
+    decision_score: float | None = Field(default=None, description="Ridge margin 평균. 확률 아님")
+    score_type: Literal["ridge_margin_mean"] = "ridge_margin_mean"
+    score_is_probability: Literal[False] = False
+    abstain_reason: AbstainReason | None = None
+    abstain_detail: str | None = None
+    windows_used: int = Field(default=0, ge=0)
+    window_scores: list[float] = Field(default_factory=list)
+    window_rejections: dict[str, int] = Field(default_factory=dict)
+    model_version: str
+    quality: TrackQuality | None = None
     processing_time_ms: int | None = Field(default=None, ge=0, description="FastAPI 내부 처리 시간 (ms)")
+
+    @model_validator(mode="after")
+    def validate_abstain(self) -> "PredictionResult":
+        if (self.label == "uncertain") != (self.abstain_reason is not None):
+            raise ValueError("abstain_reason is required exactly when label='uncertain'")
+        if self.windows_used != len(self.window_scores):
+            raise ValueError("windows_used must match window_scores")
+        return self
 
 
 class BatchPredictionResult(StrictModel):

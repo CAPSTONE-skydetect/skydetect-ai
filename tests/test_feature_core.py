@@ -9,8 +9,7 @@ import pytest
 
 from ai_server.schemas import TrackPoint, TrackQuality, TrackSequence
 from ai_server.services.feature_core import build_feature_vector
-from ai_server.services.prediction import classify_feature_vector
-from ai_server.services.train import FEATURE_NAMES
+from research.features import FEATURE_COLUMNS as FEATURE_NAMES
 from research.features import FeatureConfig
 
 FPS = 30
@@ -124,19 +123,6 @@ def test_runtime_features_use_full_hd_canonical_coordinates(resolution):
     )
     assert result.feature_vector.features.speed_median == pytest.approx(
         346.0, rel=0.002
-    )
-
-
-def test_classifier_result_is_resolution_invariant():
-    predictions = []
-    for resolution in [(640, 360), (1280, 720), (1920, 1080), (3840, 2160)]:
-        extraction = build_feature_vector(_track(_straight, resolution=resolution))
-        prediction = classify_feature_vector(extraction.feature_vector)
-        predictions.append((prediction.label, prediction.confidence))
-
-    assert {label for label, _ in predictions} == {predictions[0][0]}
-    assert [confidence for _, confidence in predictions] == pytest.approx(
-        [predictions[0][1]] * len(predictions)
     )
 
 
@@ -259,19 +245,6 @@ def test_30_and_60_fps_curved_tracks_produce_equivalent_features():
     )
     assert at_30.raw_quality["clock"] == "timestamp_ms"
     assert at_60.raw_quality["clock"] == "timestamp_ms"
-
-
-@pytest.mark.parametrize("count", [4, 90])
-def test_pipeline_always_produces_a_label(count):
-    """피처가 나오든 거부되든 C는 항상 판정을 돌려줘야 한다."""
-    result = build_feature_vector(_track(_straight, count=count))
-    prediction = classify_feature_vector(result.feature_vector)
-
-    assert prediction.label in {"bird", "drone", "uncertain"}
-    if not result.accepted:
-        # 근거가 없으면 확신값을 붙이면 안 된다.
-        assert prediction.label == "uncertain"
-        assert prediction.confidence == 0.0
 
 
 def _curved_track(fps: int, duration: float = 5.0) -> TrackSequence:

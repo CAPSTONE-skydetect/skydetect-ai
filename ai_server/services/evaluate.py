@@ -1,351 +1,177 @@
-"""Part C: RF 분류기 성능 평가 스크립트.
+"""Part C: MiniRocket + Ridge 평가 스크립트.
 
-주 지표는 train 학습 → test 홀드아웃 평가이며,
-보조 지표로 train 내부 GroupKFold(family_id) 교차검증을 함께 산출한다.
+B 패키지의 세 학습 구성(실제-only / 실제+증강 / 합성-only)을 각각 새로 학습하고
+**같은 실제 validation** 에서 창·track·원본 영상 그룹 단위로 비교한다.
 
-피처 목록은 train.FEATURE_NAMES를 참조하므로, 피처가 바뀌어도
-이 스크립트를 수정할 필요가 없다.
+    python -m ai_server.services.evaluate                    # reports/minirocket/ 에 저장
+    python -m ai_server.services.evaluate --publish          # docs/ 에 확정본 복사
+    python -m ai_server.services.evaluate --margin-threshold 0.2   # 보류 정책 결과 추가
+
+주의: validation 은 개발 중 반복 사용된 자료이고 과거 test 는 이미 열람했다.
+여기 숫자는 개발 비교이지 새 실제 영상에 대한 최종 성능이 아니다.
 """
 
+from __future__ import annotations
+
+import argparse
 import json
 import shutil
+import time
 from pathlib import Path
-from typing import Any
 
-import matplotlib
-
-matplotlib.use("Agg")
-
-import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-from sklearn.metrics import (
-    accuracy_score,
-    average_precision_score,
-    classification_report,
-    confusion_matrix,
-    roc_auc_score,
-    roc_curve,
-)
-from sklearn.model_selection import GroupKFold, cross_val_score
 
-from ai_server.services.train import (
-    FEATURE_NAMES,
-    MIN_SAMPLES_LEAF,
-    N_ESTIMATORS,
-    RANDOM_STATE,
-    build_classifier,
-    extract_provenance,
-    load_dataset,
+from ai_server.services.sequence_model import (
+    ALPHA_SOURCE,
+    ARMS,
+    DEFAULT_PACKAGE,
+    PROJECT_ROOT,
+    REPRESENTATION_FIT,
+    aggregate_scores,
+    choose_alpha,
+    decision_scores,
+    file_hash,
+    fit_arm,
+    group_bootstrap_ci,
+    library_versions,
+    load_package,
+    metrics,
+    predict_labels,
 )
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_TRAIN_PATH = str(_PROJECT_ROOT / "data" / "train_features.csv")
-_DEFAULT_TEST_PATH = str(_PROJECT_ROOT / "data" / "test_features.csv")
-_DEFAULT_REPORT_DIR = str(_PROJECT_ROOT / "reports")
-
-# 양성 클래스. ROC-AUC / PR-AUC 계산 기준이다.
-_POSITIVE_LABEL = "drone"
-
-# 정확도를 분해해서 볼 세그먼트 컬럼. 없는 컬럼은 자동으로 건너뛴다.
-_SEGMENT_COLUMNS = [
-    "observation_profile",
-    "scenario",
-    "behavior_mode",
-    "training_length_group",
-]
-
-# 교차검증 시 누수를 막기 위한 그룹 컬럼.
-_GROUP_COLUMN = "family_id"
-
-
-def _check_leakage(train_df: pd.DataFrame, test_df: pd.DataFrame) -> dict[str, Any]:
-    """train/test 사이의 누수 여부를 검사한다."""
-    result: dict[str, Any] = {}
-    for column in [_GROUP_COLUMN, "sample_id"]:
-        if column in train_df.columns and column in test_df.columns:
-            overlap = set(train_df[column]) & set(test_df[column])
-            result[f"{column}_overlap"] = len(overlap)
-    result["duplicate_feature_rows"] = int(
-        pd.merge(train_df[FEATURE_NAMES], test_df[FEATURE_NAMES]).shape[0]
-    )
-    return result
-
-
-def _segment_accuracy(
-    test_df: pd.DataFrame, y_true: np.ndarray, y_pred: np.ndarray
-) -> dict[str, Any]:
-    """세그먼트별 정확도를 분해한다. 취약 시나리오를 찾기 위함이다."""
-    segments: dict[str, Any] = {}
-    for column in _SEGMENT_COLUMNS:
-        if column not in test_df.columns:
-            continue
-        breakdown = {}
-        for value in sorted(test_df[column].dropna().unique()):
-            mask = (test_df[column] == value).to_numpy()
-            breakdown[str(value)] = {
-                "n": int(mask.sum()),
-                "accuracy": round(float(accuracy_score(y_true[mask], y_pred[mask])), 4),
-            }
-        segments[column] = breakdown
-    return segments
-
-
-def _plot_segment(ax, title: str, breakdown: dict[str, Any], baseline: float) -> None:
-    """세그먼트별 정확도를 가로 막대로 그린다.
-
-    전체 정확도를 점선으로 함께 표시해 어느 구간이 평균을 끌어내리는지 보이게 한다.
-    """
-    items = sorted(breakdown.items(), key=lambda pair: pair[1]["accuracy"])
-    labels = [f"{name}\n(n={stats['n']})" for name, stats in items]
-    values = [stats["accuracy"] for _, stats in items]
-    # 전체 평균을 밑도는 구간을 붉게 칠해 취약 지점을 즉시 구분한다.
-    colors = ["#d9534f" if v < baseline else "#5b9bd5" for v in values]
-
-    bars = ax.barh(labels, values, color=colors)
-    ax.axvline(baseline, color="black", ls="--", lw=1)
-    ax.set_xlim(0, 1.0)
-    ax.set_title(title, fontsize=11)
-    ax.tick_params(labelsize=8)
-    for bar, value in zip(bars, values):
-        ax.text(
-            value + 0.015,
-            bar.get_y() + bar.get_height() / 2,
-            f"{value:.3f}",
-            va="center",
-            fontsize=8,
-        )
-
-
-def _plot(
-    report_dir: Path,
-    cm: np.ndarray,
-    classes: list[str],
-    accuracy: float,
-    y_binary: np.ndarray,
-    proba: np.ndarray,
-    roc_auc: float,
-    importance: list[tuple[str, float]],
-    segments: dict[str, Any],
-) -> None:
-    """전체 평가 결과를 한 장의 이미지로 그린다.
-
-    윗줄은 전반 성능(혼동행렬 / ROC / 피처 중요도),
-    아랫줄은 세그먼트별 정확도 분해로 취약 구간을 드러낸다.
-    """
-    fig, axes = plt.subplots(2, 3, figsize=(18, 11))
-
-    axes[0][0].imshow(cm, cmap="Blues")
-    axes[0][0].set_xticks(range(len(classes)), classes)
-    axes[0][0].set_yticks(range(len(classes)), classes)
-    axes[0][0].set_xlabel("Predicted")
-    axes[0][0].set_ylabel("True")
-    axes[0][0].set_title(f"Confusion Matrix (acc={accuracy:.4f})")
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            axes[0][0].text(
-                j,
-                i,
-                cm[i, j],
-                ha="center",
-                va="center",
-                color="white" if cm[i, j] > cm.max() / 2 else "black",
-                fontsize=14,
-            )
-
-    fpr, tpr, _ = roc_curve(y_binary, proba)
-    axes[0][1].plot(fpr, tpr, label=f"AUC={roc_auc:.4f}")
-    axes[0][1].plot([0, 1], [0, 1], "k--", lw=0.8)
-    axes[0][1].set_xlabel("False Positive Rate")
-    axes[0][1].set_ylabel("True Positive Rate")
-    axes[0][1].set_title("ROC Curve")
-    axes[0][1].legend()
-
-    names = [name for name, _ in importance][::-1]
-    values = [value for _, value in importance][::-1]
-    axes[0][2].barh(names, values)
-    axes[0][2].set_title("Feature Importance")
-    axes[0][2].tick_params(labelsize=8)
-
-    # 아랫줄: 세그먼트 분해. 컬럼이 3개 미만이면 남는 칸은 비워 둔다.
-    bottom_columns = [c for c in _SEGMENT_COLUMNS if c in segments][:3]
-    for index in range(3):
-        ax = axes[1][index]
-        if index >= len(bottom_columns):
-            ax.axis("off")
-            continue
-        column = bottom_columns[index]
-        _plot_segment(
-            ax, f"Accuracy by {column} (dashed = overall)", segments[column], accuracy
-        )
-
-    plt.tight_layout()
-    plt.savefig(report_dir / "report.png", dpi=130)
-    plt.close(fig)
+_DEFAULT_REPORT_DIR = PROJECT_ROOT / "reports" / "minirocket"
+_DOCS_DIR = PROJECT_ROOT / "docs"
+_LEVELS = ("window", "track", "group")
 
 
 def evaluate(
-    train_path: str = _DEFAULT_TRAIN_PATH,
-    test_path: str = _DEFAULT_TEST_PATH,
-    report_dir: str = _DEFAULT_REPORT_DIR,
-    n_estimators: int = N_ESTIMATORS,
-) -> dict[str, Any]:
-    """train으로 학습하고 test 홀드아웃으로 평가해 지표를 산출한다."""
-    out_dir = Path(report_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    package: Path = DEFAULT_PACKAGE,
+    report_dir: Path = _DEFAULT_REPORT_DIR,
+    margin_threshold: float = 0.0,
+) -> dict:
+    package, report_dir = Path(package), Path(report_dir)
+    manifest, train, validation = load_package(package)
+    report_dir.mkdir(parents=True, exist_ok=True)
 
-    X_train, y_train, train_df = load_dataset(train_path)
-    X_test, y_test, test_df = load_dataset(test_path)
+    alphas = {}
+    for source in sorted(set(ALPHA_SOURCE.values())):
+        alphas[source], table = choose_alpha(train[source])
+        table.to_csv(report_dir / f"{source}_alpha_cv.csv", index=False)
 
-    clf = build_classifier(n_estimators)
-    clf.fit(X_train, y_train)
+    results = {}
+    for arm in ARMS:
+        alpha = alphas[ALPHA_SOURCE[arm]]
+        model = fit_arm(train, arm, alpha)
+        # 첫 호출은 numba JIT 준비 시간이 섞이므로 준비 후 시간과 따로 잰다.
+        start = time.perf_counter()
+        decision_scores(model, validation["X"][:1])
+        first_ms = (time.perf_counter() - start) * 1000
+        start = time.perf_counter()
+        decisions = decision_scores(model, validation["X"])
+        warm_ms = (time.perf_counter() - start) * 1000 / len(validation["X"])
 
-    classes = list(clf.classes_)
-    positive_index = classes.index(_POSITIVE_LABEL)
-    proba = clf.predict_proba(X_test)[:, positive_index]
-    y_pred = clf.predict(X_test)
-    y_binary = (y_test == _POSITIVE_LABEL).astype(int)
+        tables = aggregate_scores(validation, decisions)
+        for level, table in zip(_LEVELS, tables):
+            table = table.copy()
+            table["prediction"] = predict_labels(table.decision, margin_threshold)
+            table.to_csv(report_dir / f"{arm}_validation_{level}.csv", index=False)
+        results[arm] = dict(
+            alpha=alpha,
+            representation_fit=REPRESENTATION_FIT[arm],
+            train_windows=model["train_windows"],
+            train_groups=model["train_groups"],
+            validation={level: metrics(table, margin_threshold) for level, table in zip(_LEVELS, tables)},
+            group_bootstrap=group_bootstrap_ci(tables[2]),
+            errors=_errors(tables[2]),
+            latency_ms=dict(first_call=round(first_ms, 1), per_window_warm=round(warm_ms, 3)),
+        )
+        group = results[arm]["validation"]["group"]
+        print(f"{arm}: group macro-F1={group['macro_f1']:.4f} "
+              f"(bird recall {group['recall']['bird']:.3f}, drone recall {group['recall']['drone']:.3f})",
+              flush=True)
 
-    accuracy = accuracy_score(y_test, y_pred)
-    segments = _segment_accuracy(test_df, y_test, y_pred)
-    cm = confusion_matrix(y_test, y_pred, labels=classes)
-    per_class = classification_report(y_test, y_pred, output_dict=True, digits=4)
-    roc_auc = roc_auc_score(y_binary, proba)
-    pr_auc = average_precision_score(y_binary, proba)
-
-    # train 내부 교차검증. family 단위로 나눠 같은 궤적 계열이 양쪽에 걸치지 않게 한다.
-    cv_scores = cross_val_score(
-        build_classifier(n_estimators),
-        X_train,
-        y_train,
-        groups=train_df[_GROUP_COLUMN],
-        cv=GroupKFold(n_splits=5),
-        scoring="f1_macro",
+    report = dict(
+        status="development_comparison_only",
+        package_manifest_sha256=file_hash(package / "dataset_manifest.json"),
+        contract_version=manifest["contract_version"],
+        contract_id=manifest["contract_id"],
+        validation=dict(windows=len(validation["y"]), groups=len(set(validation["group_id"]))),
+        validation_previously_reused=manifest["validation_previously_reused"],
+        independent_real_world_evaluation_ready=False,
+        test_opened=False,
+        score_is_probability=False,
+        aggregation="window margin mean per track, then track mean per source-video group",
+        margin_threshold=margin_threshold,
+        versions=library_versions(),
+        results=results,
     )
-
-    importance = sorted(
-        zip(FEATURE_NAMES, clf.feature_importances_), key=lambda pair: -pair[1]
-    )
-
-    report: dict[str, Any] = {
-        "dataset": {
-            "train_rows": int(len(train_df)),
-            "test_rows": int(len(test_df)),
-            "train_families": int(train_df[_GROUP_COLUMN].nunique()),
-            "test_families": int(test_df[_GROUP_COLUMN].nunique()),
-            "leakage_check": _check_leakage(train_df, test_df),
-            "provenance": extract_provenance(train_df),
-        },
-        "model": {
-            "n_estimators": n_estimators,
-            "min_samples_leaf": MIN_SAMPLES_LEAF,
-            "random_state": RANDOM_STATE,
-            "n_features": len(FEATURE_NAMES),
-            "feature_names": FEATURE_NAMES,
-        },
-        "holdout": {
-            "accuracy": round(float(accuracy), 4),
-            "roc_auc": round(float(roc_auc), 4),
-            "pr_auc": round(float(pr_auc), 4),
-            "per_class": {
-                key: {metric: round(float(v), 4) for metric, v in value.items()}
-                for key, value in per_class.items()
-                if isinstance(value, dict)
-            },
-            "confusion_matrix": {"labels": classes, "matrix": cm.tolist()},
-        },
-        "cv_train_groupkfold5_f1_macro": {
-            "mean": round(float(cv_scores.mean()), 4),
-            "std": round(float(cv_scores.std()), 4),
-            "folds": [round(float(score), 4) for score in cv_scores],
-        },
-        "feature_importance": {name: round(float(v), 4) for name, v in importance},
-        "segments": segments,
-    }
-
-    (out_dir / "metrics.json").write_text(
-        json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    _plot(
-        out_dir, cm, classes, accuracy, y_binary, proba, roc_auc, importance, segments
-    )
-
+    (report_dir / "metrics.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    (report_dir / "REPORT.md").write_text(_markdown(report), encoding="utf-8")
+    print(f"리포트 저장: {report_dir}")
     return report
 
 
-def publish(report_dir: str = _DEFAULT_REPORT_DIR) -> None:
-    """확정된 리포트를 docs/ 로 승격해 저장소에 함께 기록한다.
-
-    reports/ 는 매 실행마다 덮어쓰는 작업 산출물이라 git 추적에서 제외한다.
-    발표·공유용으로 확정된 결과만 이 함수로 docs/ 에 올린다.
-    """
-    source = Path(report_dir)
-    docs_dir = _PROJECT_ROOT / "docs"
-    (docs_dir / "images").mkdir(parents=True, exist_ok=True)
-
-    shutil.copy2(source / "report.png", docs_dir / "images" / "rf_evaluation.png")
-    shutil.copy2(source / "metrics.json", docs_dir / "rf_metrics.json")
-    print(f"확정본 승격: {docs_dir / 'images' / 'rf_evaluation.png'}")
-    print(f"확정본 승격: {docs_dir / 'rf_metrics.json'}")
+def _errors(groups) -> list[dict]:
+    wrong = groups[predict_labels(groups.decision) != groups.label]
+    return [dict(group_id=r.group_id, label=r.label, decision=round(float(r.decision), 4))
+            for r in wrong.itertuples()]
 
 
-def _print_summary(report: dict[str, Any]) -> None:
-    holdout = report["holdout"]
-    cv = report["cv_train_groupkfold5_f1_macro"]
+def _markdown(report: dict) -> str:
+    lines = [
+        "# MiniRocket + Ridge 개발 비교 (C)",
+        "",
+        f"- 패키지 manifest SHA-256: `{report['package_manifest_sha256']}`",
+        f"- 입력 계약: `{report['contract_version']}` / `{report['contract_id']}`",
+        f"- validation: 창 {report['validation']['windows']}개, 원본 영상 그룹 {report['validation']['groups']}개",
+        "- validation 은 반복 사용된 개발 자료다. 최종 일반화 성능이 아니다.",
+        "- 점수는 Ridge margin 이며 확률이 아니다.",
+        "",
+        "| 학습 구성 | 변환기 fit | alpha | 학습 창/그룹 | 창 macro-F1 | track macro-F1 | 그룹 macro-F1 (95% CI) | 새 recall | 드론 recall |",
+        "| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: |",
+    ]
+    for arm, row in report["results"].items():
+        v, ci = row["validation"], row["group_bootstrap"]["macro_f1_95ci"]
+        lines.append(
+            f"| {arm} | {row['representation_fit']} | {row['alpha']:g} | "
+            f"{row['train_windows']}/{row['train_groups']} | {v['window']['macro_f1']:.4f} | "
+            f"{v['track']['macro_f1']:.4f} | {v['group']['macro_f1']:.4f} ({ci[0]:.2f}–{ci[1]:.2f}) | "
+            f"{v['group']['recall']['bird']:.4f} | {v['group']['recall']['drone']:.4f} |"
+        )
+    lines += ["", "## 그룹 단위 오분류", ""]
+    for arm, row in report["results"].items():
+        errors = ", ".join(f"{e['group_id']}({e['label']}, {e['decision']:+.3f})" for e in row["errors"]) or "없음"
+        lines.append(f"- {arm}: {errors}")
+    lines += ["", "## 추론 지연", ""]
+    for arm, row in report["results"].items():
+        lines.append(f"- {arm}: 첫 호출 {row['latency_ms']['first_call']} ms, "
+                     f"준비 후 창당 {row['latency_ms']['per_window_warm']} ms")
+    if report["margin_threshold"] > 0:
+        lines += ["", f"## 보류 정책 (|margin| < {report['margin_threshold']:g})", ""]
+        for arm, row in report["results"].items():
+            a = row["validation"]["group"]["abstain"]
+            lines.append(f"- {arm}: coverage {a['coverage']:.3f}, 판정 정확도 {a['decided_accuracy']}, "
+                         f"보류 포함 recall {a['recall_with_abstain']}")
+    return "\n".join(lines) + "\n"
 
-    print(f"\n{'=' * 52}")
-    print("홀드아웃 테스트셋 평가")
-    print(f"{'=' * 52}")
-    print(f"  accuracy : {holdout['accuracy']:.4f}")
-    print(f"  F1 (macro): {holdout['per_class']['macro avg']['f1-score']:.4f}")
-    print(f"  ROC-AUC  : {holdout['roc_auc']:.4f}")
-    print(f"  PR-AUC   : {holdout['pr_auc']:.4f}")
-    print(f"\n  GroupKFold(5) F1 macro: {cv['mean']:.4f} ± {cv['std']:.4f}")
 
-    print("\n  Confusion Matrix")
-    labels = holdout["confusion_matrix"]["labels"]
-    print(f"    {'':>10}" + "".join(f"{f'pred {c}':>14}" for c in labels))
-    for label, row in zip(labels, holdout["confusion_matrix"]["matrix"]):
-        print(f"    {f'true {label}':>10}" + "".join(f"{v:>14}" for v in row))
-
-    print("\n  Feature Importance")
-    for name, value in report["feature_importance"].items():
-        bar = "█" * int(value * 100)
-        print(f"    {name:<22} {value:.4f}  {bar}")
-
-    for column, breakdown in report["segments"].items():
-        print(f"\n  Accuracy by {column}")
-        for value, stats in breakdown.items():
-            print(f"    {value:<22} n={stats['n']:<6} acc={stats['accuracy']:.4f}")
+def publish(report_dir: Path = _DEFAULT_REPORT_DIR) -> None:
+    """검토한 실행 결과를 docs/ 확정본으로 복사한다. 지표 변화가 커밋 diff 로 드러난다."""
+    shutil.copy2(report_dir / "metrics.json", _DOCS_DIR / "minirocket_metrics.json")
+    shutil.copy2(report_dir / "REPORT.md", _DOCS_DIR / "minirocket_evaluation.md")
+    print(f"확정본 승격: {_DOCS_DIR / 'minirocket_metrics.json'}, {_DOCS_DIR / 'minirocket_evaluation.md'}")
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="RF 분류기 성능 평가")
-    parser.add_argument("--train-path", default=_DEFAULT_TRAIN_PATH, help="학습 CSV 경로")
-    parser.add_argument("--test-path", default=_DEFAULT_TEST_PATH, help="테스트 CSV 경로")
-    parser.add_argument(
-        "--report-dir", default=_DEFAULT_REPORT_DIR, help="리포트 저장 디렉토리"
-    )
-    parser.add_argument(
-        "--n-estimators", type=int, default=N_ESTIMATORS, help="트리 개수"
-    )
-    parser.add_argument(
-        "--publish",
-        action="store_true",
-        help="확정본을 docs/ 로 승격해 저장소에 기록한다",
-    )
+    parser = argparse.ArgumentParser(description="MiniRocket + Ridge 세 학습 구성 비교")
+    parser.add_argument("--package", type=Path, default=DEFAULT_PACKAGE)
+    parser.add_argument("--report-dir", type=Path, default=_DEFAULT_REPORT_DIR)
+    parser.add_argument("--margin-threshold", type=float, default=0.0,
+                        help="|margin| 이 이 값보다 작으면 uncertain 으로 보류 (0 이면 보류 없음)")
+    parser.add_argument("--publish", action="store_true", help="결과를 docs/ 에 확정본으로 복사")
     args = parser.parse_args()
-
-    result = evaluate(
-        train_path=args.train_path,
-        test_path=args.test_path,
-        report_dir=args.report_dir,
-        n_estimators=args.n_estimators,
-    )
-    _print_summary(result)
-    print(f"\n리포트 저장: {args.report_dir}")
-
+    if args.margin_threshold < 0 or not np.isfinite(args.margin_threshold):
+        parser.error("--margin-threshold must be a finite value >= 0")
+    evaluate(args.package, args.report_dir, args.margin_threshold)
     if args.publish:
         publish(args.report_dir)
