@@ -200,8 +200,10 @@ def trend_chart(title: str, points: list[dict], path: str | Path) -> Path:
         ci = points[i].get("ci")
         if ci:
             ax.plot([i, i], ci, color=METRIC, lw=1.4, alpha=0.6, zorder=2)
-        ax.text(i + 0.07, f1[i], f"{f1[i]:.3f}", ha="left", va="center", fontsize=11,
-                fontweight="bold", color=INK)
+        # 점 오른쪽에 화면 기준 고정 간격으로 두고, 배경을 깔아 선이 지나가도 읽히게 한다.
+        ax.annotate(f"{f1[i]:.3f}", (i, f1[i]), xytext=(12, 10), textcoords="offset points",
+                    ha="left", va="bottom", fontsize=11, fontweight="bold", color=INK, zorder=5,
+                    bbox=dict(boxstyle="round,pad=0.2", fc=SURFACE, ec="none", alpha=0.9))
     recall = [p.get("drone_recall") for p in points]
     has_r = [i for i, v in enumerate(recall) if v is not None]
     if has_r:
