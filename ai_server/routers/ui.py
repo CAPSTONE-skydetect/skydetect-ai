@@ -1,7 +1,10 @@
 """웹 프론트(skydetect-frontend)용 API.
 
-영상 업로드 → 수동 ROI 추적(A) → 특징 추출(B) → 판정(C)을 한 요청으로 묶는다.
+영상 업로드 → 수동 ROI 추적(A) → 판정(C)을 한 요청으로 묶는다.
 프론트는 nginx/Vite 프록시의 /ai 접두어를 거쳐 /api/... 로 부른다.
+
+MiniRocket 은 B 의 9개 요약 특징이 아니라 A 의 TrackSequence 를 그대로 받는다.
+그래서 RF 브랜치와 달리 build_feature_vector 를 거치지 않고, 응답의 features 는 None 이다.
 """
 
 from __future__ import annotations
@@ -14,8 +17,8 @@ from uuid import uuid4
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 
-from ai_server.services.feature_core import build_feature_vector
-from ai_server.services.prediction import classify_feature_vector
+from ai_server.schemas import ClassifyRequest
+from ai_server.services.prediction import classify_track_sequence
 from ai_server.services.tracker import AnalyzePipelineError, execute_manual_tracking
 from ai_server.services.tracking_video_io import (
     TrackingVideoError,
@@ -26,7 +29,7 @@ from ai_server.tracking_schemas import ManualTrackingRequest
 router = APIRouter(tags=["tracking-ui"])
 
 # 응답에 실어 보내는 판정 모델 이름. 프론트는 이 값으로 결과 표시 방식을 고른다.
-MODEL_NAME = "rf"
+MODEL_NAME = "minirocket"
 
 UPLOAD_DIR = Path(os.environ.get("SKYDETECT_UPLOAD_DIR", "storage/uploads"))
 OUTPUT_DIR = Path(
@@ -77,8 +80,8 @@ def create_manual_track(payload: ManualTrackingRequest) -> dict[str, object]:
             detail=str(exc),
         ) from exc
 
-    extraction = build_feature_vector(result.track)
-    prediction = classify_feature_vector(extraction.feature_vector)
+    # 보류 임계값과 최소 창 수는 ClassifyRequest 기본값을 쓴다 (/classify 와 같은 정책).
+    prediction = classify_track_sequence(ClassifyRequest(track_sequence=result.track))
 
     return {
         "message": "manual ROI tracking complete",
@@ -88,18 +91,7 @@ def create_manual_track(payload: ManualTrackingRequest) -> dict[str, object]:
         "metadata": result.metadata,
         "metrics": result.metrics,
         "artifacts": result.artifacts,
-        "features": {
-            "status": extraction.feature_vector.feature_status,
-            "version": extraction.feature_version,
-            "config_id": extraction.feature_config_id,
-            "values": (
-                extraction.feature_vector.features.model_dump(mode="json")
-                if extraction.feature_vector.features
-                else None
-            ),
-            "reasons": extraction.reasons,
-            "quality": extraction.raw_quality,
-        },
+        "features": None,
         "prediction": prediction.model_dump(mode="json"),
         "download_urls": {
             "source_video": _download_url(safe_video_path),
