@@ -2,12 +2,14 @@
 
 ## Outcome
 
-The frozen downstream comparison supports a **promising, narrow ablation result**:
+The frozen downstream comparison supports a **narrow regression-prevention result**:
 removing classifier windows whose resampling support mixes D0 and YOLO-recovery
-observations corrected the phantom66 decision for both frozen classifiers. It did
-not reduce object-level decision coverage in this 12-object development cohort.
-This is not an operating-model promotion: all 12 targets are drones, and phantom66
-is development data.
+observations returned both classifiers to their original D0 result on this cohort.
+Segmented Hybrid scored **6/12 for the deployed baseline and 9/12 for Stack, exactly
+the same as D0**. This is evidence that segmentation prevented the observed
+recovery-induced regression; it is **not evidence of improvement over D0** and is
+not an operating-model promotion. All 12 targets are drones, and phantom66 is
+development data.
 
 The paired-data audit found **no unexposed paired GT/A source groups** for a clean
 GT-only/A-only/GT+A training comparison. The received MiniRocket package contains
@@ -25,10 +27,16 @@ GT, include source videos/full TrackSequences, or include test arrays.
   preprocessing contract. Window starts, frame indices, timestamps, and stored
   TrackSequences were not changed.
 - Defined source as D0 or an accepted YOLO gap-recovery observation. A window was
-  excluded only when its 60-sample interpolation support used both sources. The
-  existing anti-alias filter is track-segment-wide; if it were active on a track
-  with a source transition, the runner conservatively rejects windows rather
-  than assuming the filter has local support.
+  excluded when its 60-sample interpolation support used both sources. The
+  existing anti-alias filter is track-segment-wide; the runner's current
+  `filter_cross_boundary` check is even more conservative and sequence-wide: if
+  there is at least one source transition anywhere and at least one accepted
+  anti-aliased window anywhere, it marks **every accepted window** as filter-risk
+  and excludes all of them. It does not determine whether each particular window
+  shares the affected segment/filter support. This policy did not affect these 12
+  objects: none had both an anti-aliased accepted window and a source transition.
+  It is not validated for general high-FPS mixed-source or long-gap/multi-segment
+  tracks; no threshold or policy change was made in this closeout.
 - Boundary selection used provenance only; labels and GT coordinates were used
   only for evaluation. Each candidate start and C/continuity rejection reason is
   retained in `window_audit.csv`.
@@ -70,8 +78,10 @@ class. Margins are raw decision scores, **not probabilities**.
 
 Only **phantom66** changed class between full and segmented Hybrid, for both
 models. Coverage stayed 10/12, so the correction was not an object-level abstain
-tradeoff. The full track had three accepted windows; segmentation excluded the
-two source-mixed windows and retained one clean window:
+tradeoff. For both models, segmentation restored the respective D0 score (6/12
+baseline, 9/12 Stack), not a result above D0. The full track had three accepted
+windows; segmentation excluded the two source-mixed windows and retained one
+clean window:
 
 | Model | Full window margins at 6 s, 7 s, 8 s | Full decision | Segmented retained margin at 7 s | Segmented decision |
 |---|---|---|---:|---|
@@ -93,15 +103,42 @@ Same-start D0-versus-Hybrid full/segmented score comparisons are in
 ### Regression Checks
 
 - The six saved pilot objects were passed as matched GT and D0 tracks to both
-  frozen models (24 rows). For each model, the class decision on GT-matched and A
-  was identical per object; this is a regression check, not an independent test.
-- Five saved bird-screening tracks were checked against both models (10 rows).
+  frozen adapters (24 rows). For each model, the class decision on GT-matched and
+  A was identical per object. Five saved bird-screening tracks were also passed
+  to both frozen adapters (10 rows). These are **adapter/input regressions using
+  saved tracks**, not executions of the segmentation candidate and not real-data
+  regression validation of that candidate.
+- A separate integration check below uses the actual C `window_track` function
+  on a saved no-recovery D0 pilot input to verify the segmentation candidate is
+  a no-op when there are no source transitions. This checks accepted windows and
+  frozen-model scores; it does not validate segmentation behavior on real
+  recovery transitions.
+
+  Bird-screening results:
   B01 (30 Hz) was classified as drone by both models, a known false positive for
   the user-confirmed bird. B02-B04 remained invalid at their actual 14 Hz source
   rate (`uncertain`, zero accepted windows); no timestamps were fabricated.
   B05 (50 Hz) abstained for insufficient contiguous support (zero accepted
   windows). These bird clips have no manual GT and their training exposure is
   unknown, so they are not a held-out bird benchmark.
+
+### No-Recovery Segmentation Integration Check
+
+- Input: saved `drone_1_bird_1` D0 TrackSequence from the 2026-10-17 pilot; the
+  supplied provenance contains no YOLO recovery frames, so the candidate has no
+  source boundary to exclude.
+- The check runs the real `research.trajectory_sequence.window_track` with its
+  existing `SequenceConfig`, then passes the audit's original and segmented
+  accepted windows through both frozen model score functions and adapters.
+- Result: **2 accepted windows at relative starts 0 s and 1 s**. Both the
+  deployed baseline and Stack produced exactly the same per-window scores from
+  original and segmented candidates; the adapter's own window starts and scores
+  also matched exactly. Raw scores were baseline `[-0.763397, -0.952745]` and
+  Stack `[-2.005852, -2.743791]` (scores, not probabilities). This verifies
+  candidate neutrality on this saved no-recovery pilot only, not correctness at
+  a D0/YOLO boundary.
+- The integration test is
+  `research/tests/test_exp_continuity_01.py::ContinuityPilotIntegrationTests::test_no_recovery_pilot_windows_and_frozen_scores_are_unchanged`.
 
 ## Experiment 2: Paired-Source Readiness
 
@@ -114,10 +151,12 @@ Same-start D0-versus-Hybrid full/segmented score comparisons are in
   counting them as separate videos would leak the same recording across splits.
   Across the 17 groups, birds occur in only **one** group, which also contains a
   drone track.
-- All 17 groups were previously exposed to development/evaluation. Thus the
-  number of unseen, paired source groups available for training/evaluation is
-  **0 bird / 0 drone**. Drone3's paired track is included but its GT tail still
-  needs human review and it is not an unseen holdout.
+- All 17 groups were previously exposed to development/evaluation. They may be
+  reused for future training if this prior exposure is disclosed, but doing so
+  forfeits their status as independent test data. No split was moved in this
+  batch. There are **0 unexposed paired groups** available for independent
+  evaluation. Drone3's paired track is included but its GT tail still needs
+  human review and it is not an unseen holdout.
 - Four additional local video-inventory groups have no linked GT/A track and
   need source/class review. Exact video hashes found no overlap with the package
   inventory, but that does not rule out re-encoded copies or shared recording
@@ -155,9 +194,16 @@ Ask the C/data owner for a source manifest and data bundle with, for each track:
    per partition is preferable for a credible estimate.
 4. Keep the three arms paired on identical source groups: train C on GT-only,
    A-only, and GT+A within the training groups; choose settings on validation
-   groups; report once on the untouched test groups. Do not move the current
-   pilot, ARD100 development cohort, reused validation, or inspected test data
-   into the new training split.
+   groups; report once on untouched test groups. Existing development-exposed
+   material can be moved into training only with its exposure disclosed and with
+   its independent-test status relinquished. Preserve the current split for this
+   experiment; **no data was moved in this batch**.
+
+The practical blocker is not an absolute ban on reusing development data. The
+paired bird examples come from only **one original source group** (which also
+contains a drone track), and there is no unexposed paired bird/drone evaluation
+cohort. Therefore there is no source-disjoint way to train and independently
+evaluate the three paired arms from the currently verified paired material.
 
 ## Reproduction and Provenance
 
@@ -194,9 +240,18 @@ inventory is in `artifacts/trajectory_experiments/exp-continuity-01/input_model_
 | Parent v4 summary | `4a8226f0004a8ce609269d0af0ba9d503fbef2a85213f8abb54e1f2e246b6a7b` |
 | Parent v4 classifications | `96eeafa592ab385da4de194b05477a38ebf702b6d57b37e3c49209433c1772cb` |
 
-Focused validation: **8 tests passed**, `py_compile` passed, all 48 parent
-reproduction checks passed, and `git diff --check` passed. No full A retracking,
-paid API, dataset download, or C retraining was performed.
+Focused validation at original experiment run: **8 tests passed**, `py_compile`
+passed, all 48 parent reproduction checks passed, and `git diff --check` passed.
+The closeout integration test was added afterward and is recorded separately
+below; the original run's hash manifest and result artifacts remain unchanged.
+No full A retracking, paid API, dataset download, or C retraining was performed.
+
+Closeout validation: **9 focused tests passed**, including the no-recovery pilot
+integration check; `py_compile` and `git diff --check` passed. The supplemental
+test source SHA-256 is
+`35591e971cb997d2b250f0edc99ebab463a2e9cd7791302ae7308c258c662a17`. It is
+intentionally not substituted into the hash manifest generated during the
+original experiment run.
 
 ## Outputs
 
@@ -217,14 +272,24 @@ paid API, dataset download, or C retraining was performed.
 
 - This is a post-hoc, frozen-model development ablation on 12 drone-only objects;
   the segmentation rule is not validated on an independent bird/drone cohort.
+- On this cohort, segmented Hybrid only recovered the D0 results (baseline 6/12,
+  Stack 9/12). It did not demonstrate improvement over D0. The saved pilot/bird
+  adapter checks are not segmentation-candidate real-data regressions; only the
+  no-recovery pilot neutrality integration check exercises the candidate.
 - Phantom66's improved decision relies on one remaining two-second window.
   Collect longer clean post-reacquisition support and evaluate unseen mixed-class
   recordings before considering a runtime gate.
+- `filter_cross_boundary` currently blocks every accepted window in a sequence
+  when any source transition and any accepted anti-aliased window co-occur. The
+  current 12-object result is unaffected, but high-FPS mixed-source and
+  long-gap/multi-segment generalization remains unverified.
 - Exact-hash checks cannot resolve re-encodes/session duplicates in the training
   package; six train, three validation, and two test-inventory tracks have no
   source-video hash.
-- Only EXP-CONTINUITY-01's runner, focused tests, result document, and small
-  JSON/CSV evidence artifacts are included in its final commit. Pre-existing
-  tracked modifications and untracked experiments at start were preserved and
-  excluded. The protocol was committed separately before execution. No
-  production files or model/video binaries were changed or committed.
+- The original EXP-CONTINUITY-01 runner, focused tests, result document, and small
+  JSON/CSV evidence artifacts were committed without pre-existing changes. This
+  review closeout modifies only the result document and adds one focused
+  integration test. Pre-existing tracked modifications and untracked experiments
+  were preserved and excluded. The protocol was committed separately before
+  execution. No production files, model/video binaries, or original result
+  artifacts were changed or committed in this closeout.
