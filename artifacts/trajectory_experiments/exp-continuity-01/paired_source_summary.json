@@ -1,0 +1,221 @@
+{
+  "training_package": {
+    "train": {
+      "track_count": 33,
+      "group_count": 29,
+      "video_hash_known_tracks": 27,
+      "video_hash_missing_tracks": 6,
+      "groups_by_label": {
+        "bird": 16,
+        "drone": 13
+      },
+      "tracks_by_label": {
+        "bird": 20,
+        "drone": 13
+      },
+      "raw_video_paths_available": false,
+      "manual_GT_verified": false,
+      "paired_GT_A_available": false,
+      "npz_split_arrays_present": true,
+      "test_arrays_present": false
+    },
+    "validation": {
+      "track_count": 11,
+      "group_count": 10,
+      "video_hash_known_tracks": 8,
+      "video_hash_missing_tracks": 3,
+      "groups_by_label": {
+        "bird": 6,
+        "drone": 4
+      },
+      "tracks_by_label": {
+        "bird": 7,
+        "drone": 4
+      },
+      "raw_video_paths_available": false,
+      "manual_GT_verified": false,
+      "paired_GT_A_available": false,
+      "npz_split_arrays_present": true,
+      "test_arrays_present": false
+    },
+    "test": {
+      "track_count": 10,
+      "group_count": 10,
+      "video_hash_known_tracks": 8,
+      "video_hash_missing_tracks": 2,
+      "groups_by_label": {
+        "bird": 6,
+        "drone": 4
+      },
+      "tracks_by_label": {
+        "bird": 6,
+        "drone": 4
+      },
+      "raw_video_paths_available": false,
+      "manual_GT_verified": false,
+      "paired_GT_A_available": false,
+      "npz_split_arrays_present": false,
+      "test_arrays_present": false
+    },
+    "metadata_rows": 215,
+    "manifest": {
+      "schema": "real-reference-comparison-1",
+      "created_at": "2026-09-30T05:36:48.146005+00:00",
+      "status": "development_comparison_only",
+      "contract_version": "trajectory-sequence-1.0.1",
+      "contract_id": "eb9be8154ee0f404",
+      "config": {
+        "fps": 30.0,
+        "window_seconds": 2.0,
+        "stride_seconds": 1.0,
+        "scale_floor": 0.0025,
+        "max_missing_seconds": 0.1,
+        "max_missing_fraction": 0.1,
+        "clock_tolerance_seconds": 0.001
+      },
+      "channels": [
+        "q_x",
+        "q_y",
+        "d_x",
+        "d_y"
+      ],
+      "dtype": "float32",
+      "shape": [
+        "N",
+        4,
+        60
+      ],
+      "labels": [
+        "bird",
+        "drone"
+      ],
+      "arms": {
+        "real_only": "train_real_only.npz",
+        "real_plus_augmentation": "train_real_plus_augmented.npz",
+        "synthetic_only": "train_synthetic_only.npz"
+      },
+      "common_validation": "validation_real.npz",
+      "test_included": false,
+      "real_split_source_groups": {
+        "train": 29,
+        "validation": 10,
+        "test": 10
+      },
+      "real_split_track_counts": {
+        "train": 33,
+        "validation": 11,
+        "test": 10
+      },
+      "source_group_overlap": 0,
+      "recording_sessions_verified": false,
+      "train_without_video_hash": 6,
+      "validation_previously_reused": true,
+      "prior_test_previously_inspected": true,
+      "independent_real_world_evaluation_ready": false,
+      "simulator_cohort": "experimental; prior real-plus-whole-simulator mixing worsened validation",
+      "augmentation_cohort": "development-only; prior real validation unchanged",
+      "augmentation_sample_weight_mass": 0.1,
+      "group_policy": "All windows and augmentations inherit the parent source-video group; synthetic flight seed is its group",
+      "fit_policy": "Fit transforms/classifier on each arm's training data only; no validation/test fit",
+      "counts": {
+        "train_real_only.npz": {
+          "windows": 156,
+          "groups": 29,
+          "labels": {
+            "drone": 93,
+            "bird": 63
+          },
+          "domains": {
+            "real": 156
+          }
+        },
+        "train_real_plus_augmented.npz": {
+          "windows": 6156,
+          "groups": 29,
+          "labels": {
+            "drone": 3093,
+            "bird": 3063
+          },
+          "domains": {
+            "real": 156,
+            "real_anchor_augmented": 6000
+          }
+        },
+        "train_synthetic_only.npz": {
+          "windows": 587,
+          "groups": 104,
+          "labels": {
+            "bird": 291,
+            "drone": 296
+          },
+          "domains": {
+            "synthetic": 587
+          }
+        },
+        "validation_real.npz": {
+          "windows": 59,
+          "groups": 10,
+          "labels": {
+            "bird": 29,
+            "drone": 30
+          },
+          "domains": {
+            "real": 59
+          }
+        }
+      },
+      "source_hashes": {
+        "real_manifest": "41b588b06e48015d4d337f1a148b3f860d8e7f692e89cfa50922f40efd6f94c7",
+        "real_train": "e482a681ce6cba667807810b8c8f671132f64d64c9b510a000bf5488c8a939e4",
+        "real_validation": "3b487078673239aa86c75619222cea209d1ff8c8e74bc512b80383dac7191399",
+        "real_metadata": "68f05d4f6e64b51d6d6223ee2e4cca912b0962eca6c85be403d36bf7a4aa248c",
+        "synthetic_train": "36e8c6cd9dbe1791a782c4dca34b14c5e154a520ed7f6f58429b6d6ab023e416",
+        "synthetic_metadata": "6fda8a4b7ce318921496c4406adae1be90eda7affabe08dd8018be0237447915",
+        "simulator_profile": "e41a87e0c654e95e6edbf6b81c5e89fad48a9bb87810d8d64d69a23060d82118",
+        "group_audit": "65c24d8a7575c46ec29f2880ad1b4f8823e93063ddac7f121f0259ed1ec6ecdf",
+        "augmentation_manifest": "fdc544ce7ce55356faa0b5f94947ee5d989372f935fcf8f1b7aee4917c47cbd2",
+        "augmentation_train": "9c52b5ccb814e621dd0f5e6ee6edce054109440d578fd3be028bf29007153790",
+        "augmentation_provenance": "5cb71f18e1fd921c45409c7836717be955f323a8bbe5521855cf4d7ef86bb43e",
+        "augmentation_gate": "4f12e74b284cd555e2e5ab99090794cd3ab5151b4d708712f6796834e5a321bd"
+      },
+      "file_hashes": {
+        "augmentation_provenance.csv": "5cb71f18e1fd921c45409c7836717be955f323a8bbe5521855cf4d7ef86bb43e",
+        "real_metadata.csv": "c004c6664a6056512678eb908bf3f026edce86490dc25dee5719ecfc250d9c86",
+        "simulator_profile.json": "e41a87e0c654e95e6edbf6b81c5e89fad48a9bb87810d8d64d69a23060d82118",
+        "source_inventory.csv": "5d75f82a767a6fceca5f9102fa7d0c822773b0a1c159809806e2f937ec25042c",
+        "synthetic_metadata.csv": "649e33da400ca374e35dd7a26747e99a09fe96724c8239a8db6b6150c79cac35",
+        "train_real_only.npz": "3d61eed3b5ec71f1e5af3190c209d4e2fac7b4f36a8d97571dc188bbd82b3f36",
+        "train_real_plus_augmented.npz": "bb5295c1c4e4456db680aab3cc8d05e1f2674de0c1eb725b9279317ae68515ac",
+        "train_synthetic_only.npz": "77212bb3c5eae881429f870d71f4927d3743676c73364a1c5b6a2519205d476a",
+        "validation_real.npz": "3b487078673239aa86c75619222cea209d1ff8c8e74bc512b80383dac7191399",
+        "README.md": "98e99d56845f1ee0b5be96f4bfaa3d57cce0b6ebd53e8f67d2273e4f918cad24"
+      }
+    }
+  },
+  "package_source_group_rows": 49,
+  "local_gt_a_pair_records": 19,
+  "local_gt_a_source_groups": 17,
+  "coordinate_compatible_gt_a_pair_records": 19,
+  "local_pair_labels_by_track": {
+    "bird": 2,
+    "drone": 17
+  },
+  "local_pair_source_groups_by_label": {
+    "bird": 1,
+    "drone": 17
+  },
+  "local_source_groups_with_bird": 1,
+  "local_source_groups_with_drone": 17,
+  "local_groups_containing_both_classes": 1,
+  "local_pair_groups_development_exposed": 17,
+  "additional_unpaired_local_videos": 4,
+  "independent_source_disjoint_paired_split_feasible": false,
+  "train_validation_test_paired_split_feasible": false,
+  "reason": "all existing paired GT/A sources were development-exposed; package has no verified manual GT or source videos; only new unseen sources count toward a leakage-free split",
+  "exact_video_hash_matches_between_local_pairs_and_package": 0,
+  "source_disjoint_unexposed_paired_groups_by_label": {
+    "bird": 0,
+    "drone": 0
+  },
+  "overlap_caveat": "Missing package video hashes and re-encoded/session duplicates prevent proving complete independence"
+}
