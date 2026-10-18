@@ -12,10 +12,12 @@ import csv
 from dataclasses import dataclass
 from html import escape
 import json
+import os
 from math import hypot
 from pathlib import Path
 from typing import Any
 
+import cv2
 from defusedxml import ElementTree
 import numpy as np
 
@@ -369,6 +371,10 @@ def evaluate_track(
                 "timestamp_ms": gt.timestamp_ms,
                 "error_px": error_px,
                 "error_bbox_diagonal": normalized_error,
+                "error_bbox_width": error_px / gt.width,
+                "gt_bbox_size": [gt.width, gt.height],
+                "gt_keyframe": gt.keyframe,
+                "gt_occluded": gt.occluded,
                 "gt_center": [gt.cx, gt.cy],
                 "prediction_center": [prediction.cx, prediction.cy],
                 "confidence": prediction.confidence,
@@ -503,7 +509,55 @@ def evaluate_track(
             "pixel_threshold_success": pixel_success,
             "normalized_threshold_success": normalized_success,
         },
+        "temporal": _temporal_metrics(
+            attempted_frame_scores if attempted_frame_count is not None else frame_scores,
+            sorted(attempted_gt_frames) if attempted_frame_count is not None else sorted(gt_frames),
+        ),
         "frames": frame_scores,
+    }
+
+
+def _temporal_metrics(
+    frames: list[dict[str, Any]], gt_frames: list[int]
+) -> dict[str, Any]:
+    """Compare vector displacements on identical consecutive observed pairs."""
+    residual_steps, velocity_errors = [], []
+    gt_length = prediction_length = 0.0
+    gt_pairs = sum(b == a + 1 for a, b in zip(gt_frames, gt_frames[1:]))
+    pair_scores = []
+    for previous, current in zip(frames, frames[1:]):
+        if current["frame_index"] != previous["frame_index"] + 1:
+            continue
+        dt = (current["timestamp_ms"] - previous["timestamp_ms"]) / 1000.0
+        if dt <= 0:
+            raise TrackingEvaluationError("temporal evaluation requires increasing timestamps")
+        gt_step = np.subtract(current["gt_center"], previous["gt_center"])
+        prediction_step = np.subtract(current["prediction_center"], previous["prediction_center"])
+        change = float(np.linalg.norm(prediction_step - gt_step))
+        gt_length += float(np.linalg.norm(gt_step))
+        prediction_length += float(np.linalg.norm(prediction_step))
+        residual_steps.append(change)
+        velocity_errors.append(change / dt)
+        pair_scores.append({
+            "previous_frame": previous["frame_index"],
+            "frame_index": current["frame_index"],
+            "dt_seconds": dt,
+            "error_change_px": change,
+            "velocity_vector_error_px_s": change / dt,
+        })
+    return {
+        "coordinate_space": "source_video_pixels",
+        "scope": "attempted_window_consecutive_matched_pairs",
+        "pair_count": len(pair_scores),
+        "eligible_gt_pair_count": gt_pairs,
+        "pair_coverage": _safe_ratio(len(pair_scores), gt_pairs),
+        "error_change_px": _distribution(residual_steps),
+        "velocity_vector_error_px_s": _distribution(velocity_errors),
+        "gt_path_length_px": gt_length,
+        "prediction_path_length_px": prediction_length,
+        "path_length_ratio": prediction_length / gt_length if gt_length > 1e-9 else None,
+        "path_ratio_status": "ok" if gt_length > 1e-9 else "undefined_stationary_or_no_pairs",
+        "pairs": pair_scores,
     }
 
 
@@ -583,6 +637,26 @@ def evaluate_files(
         "transform_source": geometry.transform_source,
         "original_to_processed": geometry.original_to_processed.tolist(),
     }
+    # Uniform display coordinates permit cross-resolution comparisons without
+    # changing the original source-pixel measurements or B's 1920px policy.
+    scale = 1280.0 / geometry.source_width
+    eligible = [f for f in report["frames"] if
+                report["timeline"]["attempted_first_frame"] <= f["frame_index"] <=
+                report["timeline"]["attempted_last_frame"]]
+    report["reference_metrics"] = {
+        "width": 1280,
+        "height": geometry.source_height * scale,
+        "source_pixel_scale": scale,
+        "error_px": _distribution([f["error_px"] * scale for f in eligible]),
+        "error_bbox_width": _distribution([f["error_bbox_width"] for f in eligible]),
+        "error_bbox_diagonal": _distribution([f["error_bbox_diagonal"] for f in eligible]),
+        "gt_width_px": _distribution([f["gt_bbox_size"][0] * scale for f in eligible]),
+        "gt_interpolated_frame_ratio": _safe_ratio(sum(not f["gt_keyframe"] for f in eligible), len(eligible)),
+        "error_change_px": _distribution([
+            p["error_change_px"] * scale for p in report["temporal"]["pairs"]]),
+        "velocity_vector_error_px_s": _distribution([
+            p["velocity_vector_error_px_s"] * scale for p in report["temporal"]["pairs"]]),
+    }
     return report
 
 
@@ -622,13 +696,277 @@ def evaluate_manifest(path: str | Path) -> dict[str, Any]:
     )
 
 
-def evaluate_dataset(root: str | Path, output_dir: str | Path) -> list[dict[str, Any]]:
+def write_comparison_video(
+    *,
+    cvat_xml: str | Path,
+    trajectory_csv: str | Path,
+    metadata_json: str | Path,
+    overlay_video: str | Path,
+    output_video: str | Path,
+    sample_id: str,
+    track_id: int | None = None,
+    track_ids: tuple[int, ...] | None = None,
+    label: str | None = None,
+    include_occluded: bool = True,
+    prediction_frame_offset: int = 0,
+    source_is_trimmed: bool = False,
+) -> dict[str, Any]:
+    """Render GT and prediction centers over an existing A overlay video."""
+    report = evaluate_files(
+        cvat_xml=cvat_xml,
+        trajectory_csv=trajectory_csv,
+        metadata_json=metadata_json,
+        sample_id=sample_id,
+        track_id=track_id,
+        track_ids=track_ids,
+        label=label,
+        include_occluded=include_occluded,
+        prediction_frame_offset=prediction_frame_offset,
+        source_is_trimmed=source_is_trimmed,
+    )
+    geometry = load_video_geometry(metadata_json)
+    metadata = json.loads(Path(metadata_json).read_text(encoding="utf-8"))
+    exit_confirmed_frame = metadata.get("exit_confirmed_frame")
+    selected_track_ids = tuple(report["target"]["source_track_ids"])
+    ground_truth = load_cvat_track(
+        cvat_xml,
+        fps=geometry.fps,
+        track_ids=selected_track_ids,
+        include_occluded=include_occluded,
+    )
+    predictions = load_trajectory(trajectory_csv, geometry=geometry)
+    gt_by_frame = {item.frame_index: item for item in ground_truth.observations}
+    prediction_by_frame = {item.frame_index: item for item in predictions}
+
+    overlay_path = Path(overlay_video)
+    capture = cv2.VideoCapture(str(overlay_path))
+    if not capture.isOpened():
+        raise TrackingEvaluationError(f"failed to open overlay video: {overlay_path}")
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    if (width, height) != (geometry.processed_width, geometry.processed_height):
+        capture.release()
+        raise TrackingEvaluationError(
+            "overlay dimensions do not match metadata processed dimensions: "
+            f"overlay={width}x{height}, "
+            f"metadata={geometry.processed_width}x{geometry.processed_height}"
+        )
+
+    output_path = Path(output_video)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = cv2.VideoWriter(
+        str(output_path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        geometry.fps,
+        (width, height),
+    )
+    if not writer.isOpened():
+        capture.release()
+        raise TrackingEvaluationError(f"failed to create comparison video: {output_path}")
+
+    frame_index = 0
+    matched_frames = 0
+    missing_prediction_frames = 0
+    untracked_gt_frames = 0
+    exited_gt_frames = 0
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            gt_frame_index = frame_index + prediction_frame_offset
+            gt = gt_by_frame.get(gt_frame_index)
+            prediction = prediction_by_frame.get(frame_index)
+            if gt is not None and prediction is not None:
+                matched_frames += 1
+            elif gt is not None:
+                if gt_frame_index < geometry.tracking_start_frame + prediction_frame_offset:
+                    untracked_gt_frames += 1
+                elif (
+                    exit_confirmed_frame is not None
+                    and gt_frame_index >= int(exit_confirmed_frame) + prediction_frame_offset
+                ):
+                    exited_gt_frames += 1
+                else:
+                    missing_prediction_frames += 1
+            _draw_comparison_frame(
+                frame,
+                frame_index=gt_frame_index,
+                ground_truth=gt,
+                prediction=prediction,
+                geometry=geometry,
+                tracking_start_frame=geometry.tracking_start_frame + prediction_frame_offset,
+                exit_confirmed_frame=(
+                    int(exit_confirmed_frame) + prediction_frame_offset
+                    if exit_confirmed_frame is not None
+                    else None
+                ),
+            )
+            writer.write(frame)
+            frame_index += 1
+    finally:
+        capture.release()
+        writer.release()
+
+    if frame_index == 0:
+        output_path.unlink(missing_ok=True)
+        raise TrackingEvaluationError("overlay video contains no readable frames")
+    return {
+        "sample_id": sample_id,
+        "output_video": str(output_path),
+        "frames_written": frame_index,
+        "matched_frames": matched_frames,
+        "gt_frames_missing_prediction": missing_prediction_frames,
+        "gt_frames_before_roi": untracked_gt_frames,
+        "gt_frames_after_exit": exited_gt_frames,
+    }
+
+
+def _draw_comparison_frame(
+    frame: np.ndarray,
+    *,
+    frame_index: int,
+    ground_truth: GroundTruthObservation | None,
+    prediction: PredictionObservation | None,
+    geometry: VideoGeometry,
+    tracking_start_frame: int,
+    exit_confirmed_frame: int | None,
+) -> None:
+    gt_color = (70, 255, 70)
+    prediction_color = (255, 70, 255)
+    gt_center: tuple[float, float] | None = None
+    prediction_center: tuple[float, float] | None = None
+
+    if ground_truth is not None:
+        gt_box = _transform_box(
+            geometry.original_to_processed,
+            (
+                ground_truth.cx - ground_truth.width / 2.0,
+                ground_truth.cy - ground_truth.height / 2.0,
+                ground_truth.width,
+                ground_truth.height,
+            ),
+        )
+        x, y, width, height = gt_box
+        cv2.rectangle(
+            frame,
+            (int(round(x)), int(round(y))),
+            (int(round(x + width)), int(round(y + height))),
+            gt_color,
+            2,
+            cv2.LINE_AA,
+        )
+        gt_center = _transform_point(
+            geometry.original_to_processed, ground_truth.cx, ground_truth.cy
+        )
+        _draw_center_marker(frame, gt_center, gt_color)
+
+    if prediction is not None:
+        prediction_center = _transform_point(
+            geometry.original_to_processed, prediction.cx, prediction.cy
+        )
+        _draw_center_marker(frame, prediction_center, prediction_color)
+
+    status = f"frame={frame_index}"
+    if ground_truth is not None and prediction is not None:
+        error_px = hypot(
+            prediction.cx - ground_truth.cx, prediction.cy - ground_truth.cy
+        )
+        normalized_error = error_px / hypot(ground_truth.width, ground_truth.height)
+        cv2.line(
+            frame,
+            _integer_point(gt_center),
+            _integer_point(prediction_center),
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        _draw_center_marker(frame, gt_center, gt_color)
+        _draw_center_marker(frame, prediction_center, prediction_color)
+        status += (
+            f"  error={error_px:.1f}px ({normalized_error:.2f} bbox_diag)"
+            f"  A={prediction.tracking_source} conf={prediction.confidence:.2f}"
+        )
+    elif ground_truth is not None:
+        if frame_index < tracking_start_frame:
+            status += "  A=UNTRACKED (before ROI)"
+        elif exit_confirmed_frame is not None and frame_index >= exit_confirmed_frame:
+            status += "  A=EXITED"
+        else:
+            status += "  A=MISSING"
+    elif prediction is not None:
+        status += f"  GT=ABSENT  A={prediction.tracking_source}"
+    else:
+        status += "  GT=ABSENT  A=ABSENT"
+
+    _draw_status_panel(frame, status)
+
+
+def _draw_center_marker(
+    frame: np.ndarray, point: tuple[float, float], color: tuple[int, int, int]
+) -> None:
+    center = _integer_point(point)
+    cv2.circle(frame, center, 6, (0, 0, 0), 4, cv2.LINE_AA)
+    cv2.circle(frame, center, 6, color, -1, cv2.LINE_AA)
+
+
+def _integer_point(point: tuple[float, float] | None) -> tuple[int, int]:
+    if point is None:
+        raise TrackingEvaluationError("comparison point is unavailable")
+    return int(round(point[0])), int(round(point[1]))
+
+
+def _draw_status_panel(frame: np.ndarray, status: str) -> None:
+    panel_height = min(44, frame.shape[0])
+    frame[:panel_height] = (20, 20, 20)
+    cv2.putText(
+        frame,
+        "GT: green  |  A center: magenta  |  error: white line",
+        (12, 16),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (230, 230, 230),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        frame,
+        status,
+        (12, 36),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.52,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+
+
+def evaluate_dataset(
+    root: str | Path, output_dir: str | Path, *, compare_b: bool = False,
+    replay_cmc: bool = False,
+) -> list[dict[str, Any]]:
     dataset_root = Path(root)
     manifests = sorted(dataset_root.rglob("sample.json"))
     if not manifests:
         raise TrackingEvaluationError(f"no sample.json files found under {dataset_root}")
     output_root = Path(output_dir)
-    reports = [evaluate_manifest(path) for path in manifests]
+    reports = []
+    for manifest_path in manifests:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        report = evaluate_manifest(manifest_path)
+        report["provenance_note"] = str(manifest.get("provenance_note") or "")
+        if manifest.get("comparison_video"):
+            report["comparison_video"] = str(_relative_path(
+                manifest_path.parent, manifest["comparison_video"], "comparison_video",
+            ))
+        if compare_b:
+            from .tracking_feature_comparison import compare_b_features
+            report["b_features"] = compare_b_features(
+                report, manifest=manifest, manifest_root=manifest_path.parent,
+                output_dir=output_root / "b_inputs" / report["sample_id"],
+                replay_cmc=replay_cmc,
+            )
+        reports.append(report)
     for report in reports:
         write_json(output_root / "per_video" / f"{report['sample_id']}.json", report)
     _write_summary_csv(output_root / "summary.csv", reports)
@@ -642,6 +980,9 @@ def evaluate_dataset(root: str | Path, output_dir: str | Path) -> list[dict[str,
             "samples": reports,
         },
     )
+    if compare_b:
+        from .tracking_feature_comparison import write_feature_comparison_csv
+        write_feature_comparison_csv(output_root / "b_features.csv", reports)
     return reports
 
 
@@ -902,6 +1243,13 @@ def _summary_row(report: dict[str, Any]) -> dict[str, Any]:
         ]["attempted_window_ratio"],
         "longest_missing_run_frames": report["timeline"]["longest_missing_run_frames"],
         "early_termination_frames": report["timeline"]["early_termination_frames"],
+        "temporal_pair_count": report["temporal"]["pair_count"],
+        "temporal_pair_coverage": report["temporal"]["pair_coverage"],
+        "median_error_change_reference_px": report["reference_metrics"]["error_change_px"]["median"],
+        "p95_error_change_reference_px": report["reference_metrics"]["error_change_px"]["p95"],
+        "median_velocity_error_reference_px_s": report["reference_metrics"]["velocity_vector_error_px_s"]["median"],
+        "p95_velocity_error_reference_px_s": report["reference_metrics"]["velocity_vector_error_px_s"]["p95"],
+        "path_length_ratio": report["temporal"]["path_length_ratio"],
     }
 
 
@@ -915,13 +1263,84 @@ def _write_summary_csv(path: Path, reports: list[dict[str, Any]]) -> None:
 
 
 def _write_html_report(path: Path, reports: list[dict[str, Any]]) -> None:
-    rows = [_summary_row(report) for report in reports]
-    headers = list(rows[0])
-    table_header = "".join(f"<th>{escape(header)}</th>" for header in headers)
-    table_rows = "".join(
-        "<tr>" + "".join(f"<td>{escape(_render_cell(row[key]))}</td>" for key in headers) + "</tr>"
-        for row in rows
-    )
+    def number(value: Any, digits: int = 2) -> str:
+        return "—" if value is None else f"{value:.{digits}f}"
+
+    def percent(value: Any) -> str:
+        return "—" if value is None else f"{value * 100:.1f}%"
+
+    def table(headers: list[str], rows: list[list[str]]) -> str:
+        head = "".join(f"<th scope='col'>{escape(h)}</th>" for h in headers)
+        body = "".join("<tr>" + "".join(f"<td>{escape(v)}</td>" for v in row) + "</tr>" for row in rows)
+        return f"<div class='table-wrap'><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"
+
+    position_rows, temporal_rows, feature_sections, video_links = [], [], [], []
+    notes = []
+    for report in reports:
+        ref, temporal = report["reference_metrics"], report["temporal"]
+        sample = report["sample_id"]
+        position_rows.append([
+            sample, percent(report["coverage"]["attempted_window_observation_ratio"]),
+            number(ref["gt_width_px"]["median"]), number(ref["error_px"]["median"]),
+            number(ref["error_px"]["p95"]), percent(ref["error_bbox_width"]["median"]),
+            percent(ref["error_bbox_diagonal"]["median"]), percent(ref["error_bbox_diagonal"]["p95"]),
+            percent(ref["gt_interpolated_frame_ratio"]),
+        ])
+        temporal_rows.append([
+            sample, str(temporal["pair_count"]), percent(temporal["pair_coverage"]),
+            number(ref["error_change_px"]["median"]), number(ref["error_change_px"]["p95"]),
+            number(ref["velocity_vector_error_px_s"]["median"]),
+            number(ref["velocity_vector_error_px_s"]["p95"]), number(temporal["path_length_ratio"], 3),
+        ])
+        if report.get("provenance_note"):
+            notes.append(f"<li><strong>{escape(sample)}</strong>: {escape(report['provenance_note'])}</li>")
+        if report.get("comparison_video"):
+            url = os.path.relpath(report["comparison_video"], path.parent)
+            video_links.append(f"<li><a href='{escape(url, quote=True)}'>{escape(sample)} GT/A 비교 영상</a></li>")
+        b = report.get("b_features")
+        if not b:
+            continue
+        if b["status"] != "completed":
+            reason = "; ".join(b.get("reasons") or [b["status"]])
+            feature_sections.append(f"<article><h3>{escape(sample)}</h3><p class='warning'>B 비교 상태: {escape(b['status'])} / {escape(reason)}</p></article>")
+            continue
+        gt_full = {r["feature"]: r for r in b["full_gt_comparisons"]}
+        feature_rows = []
+        for row in b["comparisons"]:
+            full = gt_full[row["feature"]]
+            feature_rows.append([
+                row["feature"], row["unit"], number(full["gt"], 4), number(row["gt"], 4),
+                number(row["a"], 4), number(row["signed_difference"], 4),
+                number(full["signed_difference"], 4),
+                "—" if row["relative_difference_percent"] is None else number(row["relative_difference_percent"], 1) + "%",
+            ])
+        counts = b["point_counts"]
+        camera = b["camera_verification"]
+        config = b["config"]
+        feature_table = table([
+            "특징", "단위", "GT 전체", "GT 공통 프레임", "A", "A − GT 공통", "A − GT 전체", "GT 공통 대비 변화",
+        ], feature_rows)
+        feature_sections.append(
+            f"<article><h3>{escape(sample)}</h3><p>입력 점 수: GT 전체 {counts['gt_full']} / "
+            f"GT 공통 {counts['gt_matched']} / A {counts['a']} · "
+            f"좌표계: {escape(b['coordinate_space'])} · CMC 검증 최대 차이 {number(camera['max_residual_px'], 6)}px</p>"
+            f"<p class='small'>B 기본 설정: {config['target_fps']:g}Hz, 평활화 {config['smoothing_seconds']:g}초. "
+            f"A 중심 클램프 {b['a_clamped_point_count']}점. "
+            f"Feature {escape(b['results']['a']['feature_version'])} / 설정 {escape(b['results']['a']['feature_config_id'])}</p>"
+            f"{feature_table}</article>"
+        )
+    position_table = table([
+        "대상", "시도 구간 관측률", "GT 폭 중앙값(px)", "위치 중앙값(px)", "위치 P95(px)",
+        "폭 대비 중앙값", "대각선 대비 중앙값", "대각선 대비 P95",
+        "GT 비키프레임 비율",
+    ], position_rows)
+    temporal_table = table([
+        "대상", "비교 프레임 쌍", "GT 쌍 대비 관측률", "ΔError 중앙값(px)", "ΔError P95(px)",
+        "속도 벡터 오차 중앙값(px/s)", "속도 벡터 오차 P95(px/s)", "A / GT 경로 길이",
+    ], temporal_rows)
+    b_html = "".join(feature_sections) or "<p>실제 B 특징 비교를 생성하려면 dataset 명령에 --compare-b를 추가하세요.</p>"
+    provenance_html = f"<ul>{''.join(notes)}</ul>" if notes else ""
+    videos_html = f"<h2>기존 GT/A 비교 영상</h2><ul>{''.join(video_links)}</ul>" if video_links else ""
     document = f"""<!doctype html>
 <html lang="ko">
 <head>
@@ -930,20 +1349,42 @@ def _write_html_report(path: Path, reports: list[dict[str, Any]]) -> None:
   <title>SkyDetect tracking evaluation</title>
   <style>
     :root {{ color-scheme: light; --ink: #18231d; --paper: #f3f0e5; --line: #b8b3a3; --accent: #bf4f2f; }}
-    body {{ margin: 0; padding: 32px; background: linear-gradient(135deg, #f3f0e5, #dce7d7); color: var(--ink); font: 15px/1.5 Georgia, serif; }}
+    body {{ margin: 0; padding: 32px; background: linear-gradient(135deg, #f3f0e5, #dce7d7); color: var(--ink); font: 15px/1.6 Georgia, serif; }}
     main {{ max-width: 1400px; margin: auto; }}
     h1 {{ margin: 0 0 8px; font-size: clamp(28px, 5vw, 52px); }}
     p {{ margin: 0 0 24px; }}
+    h2 {{ margin: 40px 0 12px; font-size: 26px; }}
+    h3 {{ margin: 0 0 10px; font-size: 20px; }}
+    nav {{ display: flex; gap: 20px; flex-wrap: wrap; margin: 20px 0; }}
+    a {{ color: var(--accent); text-underline-offset: 4px; }}
+    article {{ background: rgba(255,255,255,.5); padding: 20px; margin: 20px 0; border: 1px solid var(--line); }}
+    .small {{ font-size: 13px; }}
+    .warning {{ color: #93452b; }}
     .table-wrap {{ overflow-x: auto; border: 1px solid var(--line); background: rgba(255,255,255,.72); box-shadow: 8px 8px 0 rgba(24,35,29,.12); }}
     table {{ width: 100%; border-collapse: collapse; white-space: nowrap; }}
     th, td {{ padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: right; }}
     th {{ background: var(--ink); color: var(--paper); font-size: 12px; letter-spacing: .04em; }}
-    th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) {{ text-align: left; }}
+    th:first-child, td:first-child {{ text-align: left; }}
     tr:last-child td {{ border-bottom: 0; }}
+    @media (max-width: 600px) {{ body {{ padding: 16px; }} article {{ padding: 12px; }} }}
   </style>
 </head>
-<body><main><h1>Tracking Evaluation</h1><p>{len(rows)}개 영상의 GT 대비 A 추적 결과</p>
-<div class="table-wrap"><table><thead><tr>{table_header}</tr></thead><tbody>{table_rows}</tbody></table></div>
+<body><main><h1>Tracking Evaluation</h1><p>{len(reports)}개 객체 추적의 GT 대비 A 평가. 동일 프레임·동일 좌표계·동일 추적 시도 구간을 비교합니다.</p>
+<nav><a href="#position">위치·크기 대비 오차</a><a href="#temporal">움직임 정확도</a><a href="#features">실제 B 특징</a><a href="summary.csv">요약 CSV</a><a href="summary.json">전체 JSON</a></nav>
+{provenance_html}
+<h2 id="position">① 위치 정확도 · ② 객체 크기 대비 정확도</h2>
+<p>픽셀은 기준 폭 1280px로 환산했습니다. 화면비는 원본을 유지합니다. 정규화 오차는 각 프레임의 GT bbox로 나눈 뒤 집계합니다. 관측률은 ROI 지정 전·처리 제한 후를 제외한 실제 시도 구간 기준입니다. GT 비키프레임 비율은 공통 관측 중 CVAT keyframe=False인 프레임 비율로, 수작업 검수 여부를 직접 증명하지는 않습니다.</p>
+{position_table}
+<h2 id="temporal">③ 움직임 정확도</h2>
+<p>ΔError = ‖(A<sub>t</sub>−GT<sub>t</sub>)−(A<sub>t−1</sub>−GT<sub>t−1</sub>)‖. 속도 벡터 오차는 ΔError를 실제 timestamp 간격(초)으로 나눕니다. 연속한 공통 관측 프레임 쌍만 사용하며 누락 구간은 연결하지 않습니다.</p>
+{temporal_table}
+<p class="small">두 픽셀 지표는 기준 폭 1280px입니다. 시간당 환산은 FPS 차이를 반영하지만 시간 해상도 차이를 완전히 제거하지는 않습니다. 경로 비율 1은 이동거리 합이 같다는 의미이며, 모양·방향까지 같다는 뜻은 아닙니다. GT가 정지했거나 비교 쌍이 없으면 비율은 미정(—)입니다. GT 표시·보간 오차도 포함되므로 값 전체를 A의 떨림으로 단정하지 않습니다.</p>
+<h2 id="features">실제 B Feature v4 비교</h2>
+<p>프로덕션 build_feature_vector를 그대로 호출합니다. GT 전체는 추적 시도 구간의 모든 GT, GT 공통은 A가 관측한 프레임과 timestamp만 남긴 GT입니다. A−GT 공통은 공통 관측에서 좌표 차이의 영향을, A−GT 전체는 누락까지 포함한 특징 차이를 보여줍니다. 두 차이는 평활화 등 비선형 연산 때문에 단순 합산하지 않습니다.</p>
+<p>CMC를 쓴 A에는 검증된 같은 프레임별 변환을 GT에도 적용합니다. B는 기준 폭 1920px 좌표로 특징을 계산하므로 위의 1280px 움직임 오차와 단위 기준이 다릅니다. GT가 0에 가까운 특징은 상대 %가 불안정하니 원래 값과 절대 차이를 함께 확인하세요.</p>
+{b_html}
+{videos_html}
+<p class="small">이 비교는 궤적 입력에 따른 B 특징의 변화를 측정합니다. C 분류 성능 저하나 개선을 직접 측정한 결과는 아닙니다. 품질·confidence는 궤적 출처에 따라 다르며 별도의 C 판정으로 해석하지 않습니다.</p>
 </main></body></html>
 """
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -973,8 +1414,30 @@ def _single_command(args: argparse.Namespace) -> None:
 
 
 def _dataset_command(args: argparse.Namespace) -> None:
-    reports = evaluate_dataset(args.root, args.output)
+    reports = evaluate_dataset(
+        args.root, args.output, compare_b=args.compare_b, replay_cmc=args.replay_cmc,
+    )
     print(f"completed: {len(reports)} samples")
+
+
+def _visualize_command(args: argparse.Namespace) -> None:
+    result = write_comparison_video(
+        cvat_xml=args.gt,
+        trajectory_csv=args.trajectory,
+        metadata_json=args.metadata,
+        overlay_video=args.overlay,
+        output_video=args.output,
+        sample_id=args.sample_id,
+        track_ids=tuple(args.track_id) if args.track_id else None,
+        label=args.label,
+        include_occluded=not args.ignore_occluded,
+        prediction_frame_offset=args.prediction_frame_offset,
+        source_is_trimmed=args.source_is_trimmed,
+    )
+    print(
+        f"completed: {result['sample_id']} "
+        f"({result['frames_written']} frames) -> {result['output_video']}"
+    )
 
 
 def main() -> None:
@@ -1001,7 +1464,30 @@ def main() -> None:
     dataset = subparsers.add_parser("dataset", help="Evaluate every sample.json")
     dataset.add_argument("root", type=Path)
     dataset.add_argument("--output", type=Path, required=True)
+    dataset.add_argument("--compare-b", action="store_true", help="Compare actual B runtime features for GT and A")
+    dataset.add_argument("--replay-cmc", action="store_true", help="Reconstruct and verify missing camera transforms from video/debug observations")
     dataset.set_defaults(run=_dataset_command)
+
+    visualize = subparsers.add_parser(
+        "visualize", help="Render CVAT GT over an existing A overlay video"
+    )
+    visualize.add_argument("--gt", type=Path, required=True)
+    visualize.add_argument("--trajectory", type=Path, required=True)
+    visualize.add_argument("--metadata", type=Path, required=True)
+    visualize.add_argument("--overlay", type=Path, required=True)
+    visualize.add_argument("--sample-id", required=True)
+    visualize.add_argument(
+        "--track-id",
+        type=int,
+        action="append",
+        help="CVAT track ID; repeat to merge explicitly selected track fragments",
+    )
+    visualize.add_argument("--label")
+    visualize.add_argument("--prediction-frame-offset", type=int, default=0)
+    visualize.add_argument("--source-is-trimmed", action="store_true")
+    visualize.add_argument("--ignore-occluded", action="store_true")
+    visualize.add_argument("--output", type=Path, required=True)
+    visualize.set_defaults(run=_visualize_command)
 
     args = parser.parse_args()
     args.run(args)

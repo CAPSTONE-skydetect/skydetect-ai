@@ -1,0 +1,2 @@
+-r requirements-minirocket.txt
+pydantic==2.12.5

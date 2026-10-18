@@ -23,4 +23,5 @@ reports/
 
 # Runtime tracking artifacts
 artifacts/manual_tracks/
+artifacts/trajectory_experiments/
 storage/uploads/

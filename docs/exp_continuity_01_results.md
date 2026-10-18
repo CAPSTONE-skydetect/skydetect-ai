@@ -249,7 +249,7 @@ No full A retracking, paid API, dataset download, or C retraining was performed.
 Closeout validation: **9 focused tests passed**, including the no-recovery pilot
 integration check; `py_compile` and `git diff --check` passed. The supplemental
 test source SHA-256 is
-`35591e971cb997d2b250f0edc99ebab463a2e9cd7791302ae7308c258c662a17`. It is
+`edbfbd6780ec2980b568e340d6c529710cc251ae84d3be619cf7c19443e0c451`. It is
 intentionally not substituted into the hash manifest generated during the
 original experiment run.
 

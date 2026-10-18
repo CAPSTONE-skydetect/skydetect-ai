@@ -1,6 +1,8 @@
 from copy import deepcopy
 import csv
+import json
 from pathlib import Path
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -10,10 +12,6 @@ from research.exp_continuity_01 import (
     PILOT,
     ROOT,
     audit_track_windows,
-    canonical_start,
-    load_models,
-    prepare_import_paths,
-    read_json,
     source_origins,
     write_csv,
     window_sample_origins,
@@ -141,41 +139,53 @@ class ContinuityPilotIntegrationTests(unittest.TestCase):
         pilot_path = PILOT / "b_inputs/drone_1_bird_1/a_track_sequence.json"
         baseline_path = DEFAULT_RUNTIME / "models/minirocket_classifier.joblib"
         stack_path = ROOT / "artifacts/trajectory_experiments/minirocket-stack-20261018/stack.joblib"
-        required = (pilot_path, baseline_path, stack_path)
+        runtime_python = DEFAULT_RUNTIME / ".venv/bin/python"
+        required = (pilot_path, baseline_path, stack_path, runtime_python)
         if not all(path.is_file() for path in required):
             self.skipTest("saved no-recovery pilot or frozen checkpoint is unavailable")
 
-        prepare_import_paths(DEFAULT_RUNTIME)
-        from ai_server.schemas import TrackSequence
-        from research.trajectory_sequence import SequenceConfig, window_track
+        script = """
+import json
+from research.exp_continuity_01 import DEFAULT_RUNTIME, PILOT, ROOT, audit_track_windows, load_models, prepare_import_paths, read_json
+prepare_import_paths(DEFAULT_RUNTIME)
+from research.trajectory_sequence import SequenceConfig, window_track
+from ai_server.schemas import TrackSequence
+payload = read_json(PILOT / "b_inputs/drone_1_bird_1/a_track_sequence.json")
+audit = audit_track_windows(payload, set(), SequenceConfig(), window_track)
+models = load_models(DEFAULT_RUNTIME, DEFAULT_RUNTIME / "models/minirocket_classifier.joblib", ROOT / "artifacts/trajectory_experiments/minirocket-stack-20261018/stack.joblib")
+track = TrackSequence.model_validate(payload)
+result = {"transition_count": len(audit["transitions"]),
+          "starts_s": [row["relative_start_s"] for row in audit["accepted"]],
+          "segmented_starts": list(audit["segmented_by_start"]), "models": {}}
+for name, bundle in models.items():
+    original = bundle["score_fn"](audit["accepted"]).tolist()
+    segmented_windows = [audit["segmented_by_start"][start] for start in result["segmented_starts"]]
+    result["models"][name] = {
+        "original_scores": original,
+        "segmented_scores": bundle["score_fn"](segmented_windows).tolist(),
+        "adapter_scores": bundle["adapter"].predict(track).window_scores,
+        "adapter_starts": bundle["adapter"].predict(track).window_starts_s,
+    }
+print("CONTINUITY_RESULT=" + json.dumps(result))
+"""
+        completed = subprocess.run(
+            [str(runtime_python), "-c", script], cwd=ROOT, capture_output=True,
+            check=True, text=True,
+        )
+        result_line = next(
+            line for line in completed.stdout.splitlines()
+            if line.startswith("CONTINUITY_RESULT=")
+        )
+        result = json.loads(result_line.partition("=")[2])
 
-        payload = read_json(pilot_path)
-        audit = audit_track_windows(payload, set(), SequenceConfig(), window_track)
-        self.assertEqual(audit["transitions"], [])
-        self.assertTrue(audit["accepted"])
-
-        original_starts = [canonical_start(row["relative_start_s"])
-                           for row in audit["accepted"]]
-        segmented_starts = list(audit["segmented_by_start"])
-        self.assertEqual(segmented_starts, original_starts)
-
-        models = load_models(DEFAULT_RUNTIME, baseline_path, stack_path)
-        track = TrackSequence.model_validate(payload)
-        for model_name, bundle in models.items():
+        self.assertEqual(result["transition_count"], 0)
+        self.assertEqual(result["starts_s"], [0.0, 1.0])
+        self.assertEqual(result["segmented_starts"], ["0.000000000", "1.000000000"])
+        for model_name, scores in result["models"].items():
             with self.subTest(model=model_name):
-                original_scores = bundle["score_fn"](audit["accepted"])
-                segmented_windows = [audit["segmented_by_start"][start]
-                                     for start in segmented_starts]
-                segmented_scores = bundle["score_fn"](segmented_windows)
-                self.assertEqual(len(segmented_windows), len(audit["accepted"]))
-                self.assertEqual(original_scores.tolist(), segmented_scores.tolist())
-
-                prediction = bundle["adapter"].predict(track)
-                self.assertEqual(
-                    [canonical_start(value) for value in prediction.window_starts_s],
-                    original_starts,
-                )
-                self.assertEqual(prediction.window_scores, original_scores.tolist())
+                self.assertEqual(scores["original_scores"], scores["segmented_scores"])
+                self.assertEqual(scores["adapter_scores"], scores["original_scores"])
+                self.assertEqual(scores["adapter_starts"], result["starts_s"])
 
 
 if __name__ == "__main__":

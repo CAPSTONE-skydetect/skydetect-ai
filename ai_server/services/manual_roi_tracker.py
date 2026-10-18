@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Iterable
+from itertools import chain
 from math import hypot
 import os
 from pathlib import Path
@@ -13,13 +15,16 @@ import numpy as np
 
 from ai_server.schemas import TrackSequence
 from ai_server.services.foreground_motion import (
+    TemporalMotionEvidence,
     ConstantVelocityKalman,
     build_foreground_mask,
     find_residual_motion,
     foreground_contrast_score,
     place_foreground_mask,
 )
-from ai_server.services.online_appearance import OnlineAppearanceModel
+from ai_server.services.online_appearance import OnlineAppearanceModel, _subpixel_peak
+from ai_server.services.patch_registration import refine_patch_translation
+from ai_server.services.motion_lock_audit import MotionLockAudit
 from ai_server.services.tracking_adapter import observations_to_track_sequence
 from ai_server.services.tracking_video_io import (
     TrackingVideoError,
@@ -59,6 +64,17 @@ class PointObservation:
     foreground_contrast: float
     motion_score: float
     appearance_model_updated: bool
+    appearance_peak_score: float = 0.0
+    appearance_second_peak_margin: float = 0.0
+    appearance_psr: float = 0.0
+    appearance_subpixel_dx: float = 0.0
+    appearance_subpixel_dy: float = 0.0
+    appearance_refinement_status: str = "disabled"
+    contrast_recenter_dx: float = 0.0
+    contrast_recenter_dy: float = 0.0
+    contrast_recenter_applied: bool = False
+    motion_audit_applied: bool = False
+    reacquisition_streak: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,23 +115,38 @@ def process_manual_roi_video(
         init_frame_index=init_frame_index,
         max_seconds=max_seconds,
     )
-    frame_items = list(
-        iter_tracking_video_frames(
-            video_path,
-            resize_width=resize_width,
-            max_frames=max_frames,
-        )
+    decoded = iter_tracking_video_frames(
+        video_path,
+        resize_width=resize_width,
+        max_frames=max_frames,
     )
-    if not frame_items:
-        raise TrackingVideoError(f"Video contains no readable frames: {video_path}")
-    if init_frame_index >= len(frame_items):
-        raise ValueError(
-            f"init_frame_index {init_frame_index} exceeds the loaded frame range "
-            f"0..{len(frame_items) - 1}"
-        )
+    frame_items: list[tuple[int, np.ndarray]] | None = None
+    if write_overlay:
+        frame_items = list(decoded)
+        if not frame_items:
+            raise TrackingVideoError(f"Video contains no readable frames: {video_path}")
+        if init_frame_index >= len(frame_items):
+            raise ValueError(
+                f"init_frame_index {init_frame_index} exceeds the loaded frame range "
+                f"0..{len(frame_items) - 1}"
+            )
+        init_item = frame_items[init_frame_index]
+        tracking_frames: Iterable[tuple[int, np.ndarray]] = frame_items[init_frame_index:]
+    else:
+        iterator = iter(decoded)
+        init_item = None
+        for item in iterator:
+            if item[0] == init_frame_index:
+                init_item = item
+                break
+        if init_item is None:
+            raise ValueError(
+                f"init_frame_index {init_frame_index} exceeds the decoded frame range"
+            )
+        tracking_frames = chain([init_item], iterator)
 
     init_bbox = _scale_initial_bbox(metadata, target_bbox)
-    init_frame = frame_items[init_frame_index][1]
+    init_frame = init_item[1]
     frame_height, frame_width = init_frame.shape[:2]
     init_bbox = _clamp_bbox(init_bbox, width=frame_width, height=frame_height)
     init_point = (
@@ -143,7 +174,7 @@ def process_manual_roi_video(
     )
 
     observations = _track_ordered_frames(
-        frame_items=frame_items[init_frame_index:],
+        frame_items=tracking_frames,
         init_points=init_points,
         init_center=init_point,
         init_bbox=init_bbox,
@@ -202,7 +233,11 @@ def process_manual_roi_video(
             "run_id": run_id,
             "source_video_id": source_video_id,
             "source_video_path": str(Path(video_path).expanduser()),
-            "num_frames_loaded": len(frame_items),
+            "num_frames_loaded": (
+                len(frame_items)
+                if frame_items is not None
+                else init_frame_index + len(observations)
+            ),
             "num_frames_processed": len(observations),
             "init_frame_index": init_frame_index,
             "tracking_start_frame": init_frame_index,
@@ -259,6 +294,7 @@ def process_manual_roi_video(
 
     overlay_path: str | None = None
     if write_overlay:
+        assert frame_items is not None
         overlay_path = _write_overlay(
             frame_items=frame_items,
             observations=observations,
@@ -285,7 +321,7 @@ def process_manual_roi_video(
 
 def _track_ordered_frames(
     *,
-    frame_items: list[tuple[int, np.ndarray]],
+    frame_items: Iterable[tuple[int, np.ndarray]],
     init_points: np.ndarray,
     init_center: tuple[float, float],
     init_bbox: tuple[float, float, float, float],
@@ -296,8 +332,15 @@ def _track_ordered_frames(
     tuning: TrackingTuning,
     foreground_mask: np.ndarray,
 ) -> list[PointObservation]:
-    first_index, first_frame = frame_items[0]
+    frame_iterator = iter(frame_items)
+    try:
+        first_index, first_frame = next(frame_iterator)
+    except StopIteration as error:
+        raise TrackingVideoError("tracking frame stream is empty") from error
     height, width = first_frame.shape[:2]
+    # Pixel-domain gates were tuned at the pipeline's 1280 px reference width.
+    # Scale them for native-resolution diagnostics without changing D0 behavior.
+    pixel_scale = max(float(width) / 1280.0, 0.25)
     points = init_points.astype(np.float32)
     center = _clamp_point(init_center, width=width, height=height)
     bbox_w = float(init_bbox[2])
@@ -309,6 +352,8 @@ def _track_ordered_frames(
         center,
         (bbox_w, bbox_h),
         foreground_mask=foreground_mask,
+        local_refine=tuning.appearance_local_refine,
+        subpixel=tuning.appearance_subpixel,
     )
     ref_to_current = np.eye(3, dtype=np.float32)
     motion_filter = ConstantVelocityKalman(center)
@@ -319,6 +364,14 @@ def _track_ordered_frames(
         foreground_mask,
     )
     lost_streak = 0
+    motion_audit = MotionLockAudit(minimum_motion=tuning.motion_audit_min_score) if tuning.motion_lock_audit else None
+    pending_reacquisition_center: np.ndarray | None = None
+    pending_reacquisition_streak = 0
+    previous_contrast_correction: np.ndarray | None = None
+    motion_evidence = (
+        TemporalMotionEvidence(tuning.motion_temporal_alpha)
+        if tuning.motion_temporal_alpha < 1.0 else None
+    )
     observations = [
         PointObservation(
             frame_index=int(first_index),
@@ -350,7 +403,7 @@ def _track_ordered_frames(
     prev_gray = first_gray
     prev_center = np.array(center, dtype=np.float32)
     outside_streak = 0
-    for frame_index, frame in frame_items[1:]:
+    for frame_index, frame in frame_iterator:
         curr_gray = _gray(frame)
         if stabilize:
             affine, bg_stats = _estimate_background_affine(
@@ -358,6 +411,7 @@ def _track_ordered_frames(
                 curr_gray,
                 target_center=tuple(float(value) for value in prev_center),
                 target_size=(bbox_w, bbox_h),
+                analysis_width=tuning.cmc_analysis_width,
             )
             ref_to_current = affine_to_homography(affine) @ ref_to_current
             current_to_reference = _safe_inverse(ref_to_current)
@@ -366,13 +420,17 @@ def _track_ordered_frames(
             current_to_reference = np.eye(3, dtype=np.float32)
             bg_stats = {"points": 0, "inliers": 0, "inlier_ratio": 1.0}
 
+        flow_params = (
+            _target_lk_params((bbox_w, bbox_h), pixel_scale)
+            if tuning.target_scale_klt else _lk_params(pixel_scale)
+        )
         if len(points):
             next_points, status, error = cv2.calcOpticalFlowPyrLK(
                 prev_gray,
                 curr_gray,
                 points.reshape(-1, 1, 2),
                 None,
-                **_lk_params(),
+                **flow_params,
             )
         else:
             next_points = None
@@ -406,20 +464,22 @@ def _track_ordered_frames(
                 prev_gray,
                 next_points,
                 None,
-                **_lk_params(),
+                **flow_params,
             )
             if back_points is not None and back_status is not None:
                 fb_errors = np.linalg.norm(
                     back_points.reshape(-1, 2) - points,
                     axis=1,
                 )
-                good &= (back_status.reshape(-1) == 1) & (fb_errors <= 2.2)
+                good &= (back_status.reshape(-1) == 1) & (
+                    fb_errors <= 2.2 * pixel_scale
+                )
         if good.any():
             candidate_center = np.array(
                 _median_point(next_points_2d[good]),
                 dtype=np.float32,
             )
-            distance_gate = max(14.0, max(bbox_w, bbox_h) * 3.8)
+            distance_gate = max(14.0 * pixel_scale, max(bbox_w, bbox_h) * 3.8)
             distances = np.linalg.norm(next_points_2d - candidate_center, axis=1)
             good &= distances <= distance_gate
 
@@ -429,26 +489,73 @@ def _track_ordered_frames(
         template_score = 0.0
         appearance_score = 0.0
         motion_score = 0.0
+        appearance_peak_score = 0.0
+        appearance_second_peak_margin = 0.0
+        appearance_psr = 0.0
+        appearance_subpixel_dx = 0.0
+        appearance_subpixel_dy = 0.0
+        appearance_refinement_status = "disabled"
+        contrast_recenter_dx = 0.0
+        contrast_recenter_dy = 0.0
+        contrast_recenter_applied = False
+        motion_audit_applied = False
         fb_error = float(np.mean(fb_errors[good])) if good.any() else 99.0
+        klt_motion_center = None
         if visible_points >= required_points:
             displacement = np.median(next_points_2d[good] - points[good], axis=0)
             new_center = prev_center + displacement.astype(np.float32)
-            innovation_distance = float(np.linalg.norm(new_center - predicted_center))
-            kinematic_gate = max(8.0, max(bbox_w, bbox_h) * 0.55)
-            kinematic_valid = innovation_distance <= kinematic_gate
-            refined = _refine_center_by_contrast(
-                curr_gray,
-                tuple(float(value) for value in new_center),
-                radius=max(8, int(max(bbox_w, bbox_h) * 2)),
-            )
-            if refined is not None and hypot(
-                refined[0] - new_center[0],
-                refined[1] - new_center[1],
-            ) <= max(6.0, max(bbox_w, bbox_h)):
-                new_center = 0.85 * new_center + 0.15 * np.array(
-                    refined,
-                    dtype=np.float32,
+            if tuning.klt_patch_registration:
+                registered = refine_patch_translation(
+                    prev_gray, curr_gray, tuple(prev_center), tuple(new_center),
+                    (bbox_w, bbox_h), search_radius=max(2, round(3 * pixel_scale)),
                 )
+                if registered is not None:
+                    new_center = np.asarray(registered, dtype=np.float32)
+            klt_motion_center = new_center.copy()
+            innovation_distance = float(np.linalg.norm(new_center - predicted_center))
+            kinematic_gate = max(8.0 * pixel_scale, max(bbox_w, bbox_h) * 0.55)
+            kinematic_valid = innovation_distance <= kinematic_gate
+            if tuning.contrast_recentering_enabled:
+                refined = _refine_center_by_contrast(
+                    curr_gray,
+                    tuple(float(value) for value in new_center),
+                    radius=max(round(8 * pixel_scale), int(max(bbox_w, bbox_h) * 2)),
+                    subpixel=tuning.contrast_subpixel,
+                    centroid_sigma=(max(2.0 * pixel_scale, min(bbox_w, bbox_h) / 4.0)
+                                    if tuning.contrast_local_centroid else None),
+                )
+                if refined is not None and hypot(
+                    refined[0] - new_center[0],
+                    refined[1] - new_center[1],
+                ) <= max(6.0 * pixel_scale, max(bbox_w, bbox_h)):
+                    before_recenter = new_center.copy()
+                    strength = tuning.contrast_recentering_strength
+                    correction = strength * (
+                        np.array(refined, dtype=np.float32) - new_center
+                    )
+                    max_step = tuning.contrast_recentering_max_step_px
+                    correction_norm = float(np.linalg.norm(correction))
+                    if (
+                        max_step is not None
+                        and correction_norm > max_step * pixel_scale
+                    ):
+                        correction *= (max_step * pixel_scale) / correction_norm
+                    if tuning.contrast_correction_alpha < 1.0:
+                        if previous_contrast_correction is not None:
+                            alpha = tuning.contrast_correction_alpha
+                            correction = alpha * correction + (1.0 - alpha) * previous_contrast_correction
+                        previous_contrast_correction = correction.copy()
+                        new_center = new_center + correction
+                    elif max_step is None:
+                        # Preserve the baseline's floating-point operation order.
+                        new_center = (1.0 - strength) * new_center + strength * np.array(
+                            refined, dtype=np.float32,
+                        )
+                    else:
+                        new_center = new_center + correction
+                    contrast_recenter_dx = float(new_center[0] - before_recenter[0])
+                    contrast_recenter_dy = float(new_center[1] - before_recenter[1])
+                    contrast_recenter_applied = True
             template_score = _template_similarity(
                 curr_gray,
                 template,
@@ -475,13 +582,16 @@ def _track_ordered_frames(
             current=foreground_contrast,
         )
         base_search_radius = max(
-            18,
+            round(18 * pixel_scale),
             int(max(bbox_w, bbox_h) * tuning.search_radius_multiplier),
         )
         search_radius = int(
             base_search_radius * min(3.0, 1.0 + 0.45 * lost_streak)
         )
-        recovery_gate = max(8.0, max(init_bbox[2], init_bbox[3]) * 0.45) * min(
+        recovery_gate = max(
+            8.0 * pixel_scale,
+            max(init_bbox[2], init_bbox[3]) * 0.45,
+        ) * min(
             2.5,
             1.0 + 0.20 * lost_streak,
         )
@@ -492,7 +602,7 @@ def _track_ordered_frames(
             height=height,
         )
         motion_match = None
-        if (not visible or low_contrast) and predicted_center_inside_frame:
+        if (not visible or low_contrast or motion_audit is not None) and predicted_center_inside_frame:
             motion_match = find_residual_motion(
                 prev_gray,
                 curr_gray,
@@ -501,6 +611,8 @@ def _track_ordered_frames(
                 target_size=(bbox_w, bbox_h),
                 foreground_mask=foreground_mask,
                 search_radius=search_radius,
+                temporal_evidence=motion_evidence,
+                frame_index=frame_index,
             )
             motion_score = float(motion_match.score) if motion_match else 0.0
 
@@ -517,6 +629,23 @@ def _track_ordered_frames(
             and motion_match.score >= 0.38
             and motion_distance <= recovery_gate
         )
+        if motion_audit is not None:
+            candidate = motion_match.center if motion_valid else None
+            candidate_appearance = appearance_model.score(curr_gray, candidate) if candidate is not None else 0.0
+            override = motion_audit.observe(
+                klt_center=klt_motion_center if visible and not low_contrast else None,
+                background_center=affine[:, :2] @ prev_center + affine[:, 2],
+                candidate=candidate, motion_score=motion_score,
+                appearance_score=candidate_appearance, minimum_appearance=tuning.recovery_conf,
+                affine=affine, size=(bbox_w, bbox_h), pixel_scale=pixel_scale,
+            )
+            if override is not None:
+                new_center = np.asarray(override, dtype=np.float32)
+                appearance_score = candidate_appearance
+                template_score = _template_similarity(curr_gray, template, override, foreground_mask)
+                foreground_contrast = foreground_contrast_score(curr_gray, override, (bbox_w, bbox_h), foreground_mask)
+                tracking_source = "motion"
+                motion_audit_applied = True
         if visible and low_contrast:
             support_distance = (
                 hypot(
@@ -527,7 +656,7 @@ def _track_ordered_frames(
                 else float("inf")
             )
             if motion_valid and support_distance <= max(
-                8.0,
+                8.0 * pixel_scale,
                 max(bbox_w, bbox_h) * 0.80,
             ):
                 new_center = 0.62 * new_center + 0.38 * np.array(
@@ -615,6 +744,46 @@ def _track_ordered_frames(
                 )
                 visible = False
 
+            if appearance_match is not None:
+                appearance_peak_score = appearance_match.peak_score
+                appearance_second_peak_margin = appearance_match.second_peak_margin
+                appearance_psr = appearance_match.peak_to_sidelobe_ratio
+                appearance_subpixel_dx, appearance_subpixel_dy = (
+                    appearance_match.subpixel_offset
+                )
+                appearance_refinement_status = appearance_match.refinement_status
+
+        recovery_confirmation = max(
+            tuning.reacquisition_confirmation_frames,
+            tuning.temporal_evidence_frames,
+        )
+        reacquisition_streak = 0
+        if visible and lost_streak > 0 and tracking_source in {"appearance", "motion"}:
+            candidate = np.asarray(new_center, dtype=np.float32)
+            if (
+                pending_reacquisition_center is not None
+                and float(np.linalg.norm(candidate - pending_reacquisition_center))
+                <= max(4.0 * pixel_scale, recovery_gate)
+            ):
+                pending_reacquisition_streak += 1
+            else:
+                pending_reacquisition_streak = 1
+            pending_reacquisition_center = candidate
+            reacquisition_streak = pending_reacquisition_streak
+            if pending_reacquisition_streak < recovery_confirmation:
+                visible = False
+                new_center = predicted_center
+                tracking_source = "reacquisition_pending"
+            else:
+                pending_reacquisition_center = None
+                pending_reacquisition_streak = 0
+        elif visible:
+            pending_reacquisition_center = None
+            pending_reacquisition_streak = 0
+        elif tracking_source != "reacquisition_pending":
+            pending_reacquisition_center = None
+            pending_reacquisition_streak = 0
+
         if visible and not _bbox_intersects_frame(
             (float(new_center[0]), float(new_center[1])),
             (bbox_w, bbox_h),
@@ -625,6 +794,8 @@ def _track_ordered_frames(
             tracking_source = "prediction"
 
         lost_streak = 0 if visible else lost_streak + 1
+        if not visible or tracking_source != "klt":
+            previous_contrast_correction = None
         outside_now = not _point_inside_frame(
             (float(new_center[0]), float(new_center[1])),
             width=width,
@@ -653,7 +824,7 @@ def _track_ordered_frames(
             bg_inlier_ratio=float(bg_stats["inlier_ratio"]),
             visible=visible,
             tracking_source=tracking_source,
-            fb_error=fb_error,
+            fb_error=fb_error / pixel_scale,
             template_score=template_score,
             appearance_score=appearance_score,
             motion_score=motion_score,
@@ -665,7 +836,7 @@ def _track_ordered_frames(
             and visible
             and confidence >= 0.72
             and appearance_score >= tuning.update_conf
-            and fb_error <= 1.5
+            and fb_error <= 1.5 * pixel_scale
             and frame_index % 3 == 0
         ):
             appearance_model_updated = appearance_model.update(
@@ -717,6 +888,17 @@ def _track_ordered_frames(
                 foreground_contrast=foreground_contrast,
                 motion_score=motion_score,
                 appearance_model_updated=appearance_model_updated,
+                appearance_peak_score=appearance_peak_score,
+                appearance_second_peak_margin=appearance_second_peak_margin,
+                appearance_psr=appearance_psr,
+                appearance_subpixel_dx=appearance_subpixel_dx,
+                appearance_subpixel_dy=appearance_subpixel_dy,
+                appearance_refinement_status=appearance_refinement_status,
+                contrast_recenter_dx=contrast_recenter_dx,
+                contrast_recenter_dy=contrast_recenter_dy,
+                contrast_recenter_applied=contrast_recenter_applied,
+                motion_audit_applied=motion_audit_applied,
+                reacquisition_streak=reacquisition_streak,
             )
         )
 
@@ -794,10 +976,41 @@ def _estimate_background_affine(
     *,
     target_center: tuple[float, float],
     target_size: tuple[float, float],
+    analysis_width: int | None = None,
 ) -> tuple[np.ndarray, dict[str, float]]:
     height, width = prev_gray.shape[:2]
+    if analysis_width is not None and width > analysis_width:
+        scale = float(analysis_width) / float(width)
+        analysis_height = max(1, round(height * scale))
+        resized_prev = cv2.resize(
+            prev_gray, (analysis_width, analysis_height), interpolation=cv2.INTER_AREA,
+        )
+        resized_curr = cv2.resize(
+            curr_gray, (analysis_width, analysis_height), interpolation=cv2.INTER_AREA,
+        )
+        small_affine, stats = _estimate_background_affine(
+            resized_prev,
+            resized_curr,
+            target_center=(target_center[0] * scale, target_center[1] * scale),
+            target_size=(target_size[0] * scale, target_size[1] * scale),
+        )
+        source_to_analysis = np.array(
+            [[scale, 0.0, 0.0], [0.0, scale, 0.0], [0.0, 0.0, 1.0]],
+            dtype=np.float32,
+        )
+        native = (
+            np.linalg.inv(source_to_analysis)
+            @ affine_to_homography(small_affine)
+            @ source_to_analysis
+        )
+        return native[:2].astype(np.float32), {
+            **stats,
+            "analysis_width": float(analysis_width),
+            "analysis_scale": scale,
+        }
+    pixel_scale = max(float(width) / 1280.0, 0.25)
     mask = np.full((height, width), 255, dtype=np.uint8)
-    margin = max(12.0, max(target_size) * 0.75)
+    margin = max(12.0 * pixel_scale, max(target_size) * 0.75)
     half_width = target_size[0] / 2.0 + margin
     half_height = target_size[1] / 2.0 + margin
     center_x, center_y = target_center
@@ -811,8 +1024,8 @@ def _estimate_background_affine(
         prev_gray,
         maxCorners=420,
         qualityLevel=0.01,
-        minDistance=8,
-        blockSize=7,
+        minDistance=max(2, round(8 * pixel_scale)),
+        blockSize=_odd_window(7 * pixel_scale, minimum=3),
         mask=mask,
     )
     if prev_points is None or len(prev_points) < 8:
@@ -827,7 +1040,7 @@ def _estimate_background_affine(
         curr_gray,
         prev_points,
         None,
-        **_lk_params(),
+        **_lk_params(pixel_scale),
     )
     if curr_points is None or status is None:
         return _identity_affine(), {
@@ -861,7 +1074,7 @@ def _estimate_background_affine(
         prev_2d[good],
         curr_2d[good],
         method=cv2.RANSAC,
-        ransacReprojThreshold=3.0,
+        ransacReprojThreshold=3.0 * pixel_scale,
         maxIters=2000,
         confidence=0.99,
     )
@@ -1301,6 +1514,8 @@ def _refine_center_by_contrast(
     center: tuple[float, float],
     *,
     radius: int,
+    subpixel: bool = False,
+    centroid_sigma: float | None = None,
 ) -> tuple[float, float] | None:
     height, width = gray.shape[:2]
     center_x, center_y = center
@@ -1319,7 +1534,31 @@ def _refine_center_by_contrast(
     _, max_value, _, max_location = cv2.minMaxLoc(response)
     if max_value < 5.0:
         return None
-    return float(x1 + max_location[0]), float(y1 + max_location[1])
+    if centroid_sigma is not None:
+        yy, xx = np.indices(response.shape, dtype=np.float64)
+        distance_squared = (xx + x1 - center_x) ** 2 + (yy + y1 - center_y) ** 2
+        support = distance_squared <= (3.0 * centroid_sigma) ** 2
+        values = response.astype(np.float64)
+        local_values = values[support]
+        if not local_values.size or local_values.max() < 5.0:
+            return None
+        floor = max(3.0, float(np.median(local_values)))
+        weights = np.maximum(values - floor, 0.0) * support
+        weights *= np.exp(-distance_squared / (2.0 * centroid_sigma ** 2))
+        mass = float(weights.sum())
+        if mass <= 1e-9:
+            return None
+        return (float(x1 + np.sum(xx * weights) / mass),
+                float(y1 + np.sum(yy * weights) / mass))
+    offset_x = offset_y = 0.0
+    if subpixel:
+        offset_x, offset_y, _ = _subpixel_peak(
+            response, max_location[0], max_location[1],
+        )
+    return (
+        float(x1 + max_location[0] + offset_x),
+        float(y1 + max_location[1] + offset_y),
+    )
 
 
 def _clamp_bbox(
@@ -1445,6 +1684,17 @@ def _debug_row(observation: PointObservation) -> dict[str, Any]:
         "lifecycle_state": observation.lifecycle_state,
         "forward_backward_error": observation.fb_error,
         "template_score": observation.template_score,
+        "appearance_peak_score": observation.appearance_peak_score,
+        "appearance_second_peak_margin": observation.appearance_second_peak_margin,
+        "appearance_psr": observation.appearance_psr,
+        "appearance_subpixel_dx": observation.appearance_subpixel_dx,
+        "appearance_subpixel_dy": observation.appearance_subpixel_dy,
+        "appearance_refinement_status": observation.appearance_refinement_status,
+        "contrast_recenter_dx": observation.contrast_recenter_dx,
+        "contrast_recenter_dy": observation.contrast_recenter_dy,
+        "contrast_recenter_applied": observation.contrast_recenter_applied,
+        "motion_audit_applied": observation.motion_audit_applied,
+        "reacquisition_streak": observation.reacquisition_streak,
     }
 
 
@@ -1490,9 +1740,15 @@ def _safe_inverse(matrix: np.ndarray) -> np.ndarray:
         return np.eye(3, dtype=np.float32)
 
 
-def _lk_params() -> dict[str, Any]:
+def _odd_window(value: float, *, minimum: int = 3) -> int:
+    size = max(minimum, int(round(value)))
+    return size if size % 2 else size + 1
+
+
+def _lk_params(pixel_scale: float = 1.0) -> dict[str, Any]:
+    window = _odd_window(21 * max(pixel_scale, 0.25), minimum=7)
     return {
-        "winSize": (21, 21),
+        "winSize": (window, window),
         "maxLevel": 3,
         "criteria": (
             cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,
@@ -1500,6 +1756,16 @@ def _lk_params() -> dict[str, Any]:
             0.01,
         ),
     }
+
+
+def _target_lk_params(size: tuple[float, float], pixel_scale: float = 1.0) -> dict[str, Any]:
+    """Keep a small target represented at the coarsest optical-flow level."""
+    params = _lk_params(pixel_scale)
+    short_side = max(1.0, min(size))
+    window = min(params["winSize"][0], _odd_window(1.5 * short_side, minimum=7))
+    params["winSize"] = (window, window)
+    params["maxLevel"] = min(3, max(0, int(np.floor(np.log2(max(1.0, short_side / 6.0))))))
+    return params
 
 
 def _timestamp_ms(frame_index: int, fps: float) -> int:

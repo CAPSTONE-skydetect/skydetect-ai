@@ -21,6 +21,38 @@ class MotionMatch:
     area: int
 
 
+class TemporalMotionEvidence:
+    """Causal aligned image evidence; old evidence alone cannot create a detection."""
+
+    def __init__(self, alpha: float = 0.5) -> None:
+        if not 0 < alpha <= 1:
+            raise ValueError("alpha must be in (0, 1]")
+        self.alpha = alpha
+        self.previous: np.ndarray | None = None
+        self.center: tuple[float, float] | None = None
+        self.frame_index: int | None = None
+
+    def update(self, difference: np.ndarray, center: tuple[float, float], frame_index: int) -> np.ndarray:
+        current = difference.astype(np.float32)
+        if (
+            self.previous is not None and self.previous.shape == current.shape
+            and self.frame_index == frame_index - 1 and self.center is not None
+        ):
+            height, width = current.shape
+            transform = np.array([[1, 0, center[0] - self.center[0]],
+                                  [0, 1, center[1] - self.center[1]]], dtype=np.float32)
+            aligned = cv2.warpAffine(self.previous, transform, (width, height))
+            accumulated = self.alpha * current + (1 - self.alpha) * aligned
+            # Suppress stale ghosts wherever the current image has no evidence.
+            result = np.minimum(accumulated, 2 * current)
+        else:
+            result = current
+        self.previous = current
+        self.center = center
+        self.frame_index = frame_index
+        return np.rint(result).clip(0, 255).astype(np.uint8)
+
+
 class ConstantVelocityKalman:
     """Constant-velocity prediction in camera-compensated coordinates."""
 
@@ -147,6 +179,8 @@ def find_residual_motion(
     target_size: tuple[float, float],
     foreground_mask: np.ndarray,
     search_radius: int,
+    temporal_evidence: TemporalMotionEvidence | None = None,
+    frame_index: int = 0,
 ) -> MotionMatch | None:
     height, width = curr_gray.shape[:2]
     aligned_previous = cv2.warpAffine(
@@ -158,6 +192,8 @@ def find_residual_motion(
     )
     difference = cv2.absdiff(curr_gray, aligned_previous)
     difference = cv2.GaussianBlur(difference, (3, 3), 0)
+    if temporal_evidence is not None:
+        difference = temporal_evidence.update(difference, predicted_center, frame_index)
 
     half_width = target_size[0] / 2.0
     half_height = target_size[1] / 2.0

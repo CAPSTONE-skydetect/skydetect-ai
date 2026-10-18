@@ -9,10 +9,18 @@ from ai_server.main import app
 from ai_server.schemas import TrackSequence
 from ai_server.services.manual_roi_tracker import (
     PointObservation,
+    _lk_params,
     _write_overlay,
     process_manual_roi_video,
 )
 from ai_server.tracking_schemas import TrackingTuning
+
+
+def test_lk_window_scales_with_native_resolution() -> None:
+    assert _lk_params(1.0)["winSize"] == (21, 21)
+    native = _lk_params(3.0)["winSize"]
+    assert native == (63, 63)
+    assert native[0] % 2 == 1
 
 
 def test_tracks_twenty_pixel_target_and_exports_contract(tmp_path: Path) -> None:

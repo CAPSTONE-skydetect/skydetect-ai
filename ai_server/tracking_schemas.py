@@ -10,6 +10,22 @@ class TrackingTuning(StrictModel):
     search_radius_multiplier: float = Field(default=2.5, ge=1.0, le=8.0)
     exit_confirmation_frames: int = Field(default=3, ge=1, le=120)
     online_update_enabled: bool = False
+    appearance_local_refine: bool = False
+    appearance_subpixel: bool = False
+    contrast_recentering_enabled: bool = True
+    contrast_recentering_strength: float = Field(default=0.15, ge=0.0, le=0.5)
+    contrast_recentering_max_step_px: float | None = Field(default=None, gt=0.0, le=20.0)
+    contrast_correction_alpha: float = Field(default=1.0, gt=0.0, le=1.0)
+    contrast_subpixel: bool = False
+    contrast_local_centroid: bool = False
+    klt_patch_registration: bool = False
+    target_scale_klt: bool = False
+    motion_lock_audit: bool = False
+    motion_audit_min_score: float = Field(default=0.60, ge=0.38, le=0.95)
+    reacquisition_confirmation_frames: int = Field(default=1, ge=1, le=10)
+    temporal_evidence_frames: int = Field(default=1, ge=1, le=9)
+    motion_temporal_alpha: float = Field(default=1.0, gt=0.0, le=1.0)
+    cmc_analysis_width: int | None = Field(default=None, ge=320, le=7680)
 
 
 class ManualTrackingRequest(StrictModel):

@@ -12,6 +12,21 @@ class AppearanceMatch:
     center: tuple[float, float]
     score: float
     anchor_score: float
+    peak_score: float = 0.0
+    second_peak_margin: float = 0.0
+    peak_to_sidelobe_ratio: float = 0.0
+    subpixel_offset: tuple[float, float] = (0.0, 0.0)
+    refinement_status: str = "disabled"
+
+
+@dataclass(frozen=True, slots=True)
+class TemplateMatch:
+    center: tuple[float, float]
+    peak_score: float
+    second_peak_margin: float
+    peak_to_sidelobe_ratio: float
+    subpixel_offset: tuple[float, float]
+    refinement_status: str
 
 
 class OnlineAppearanceModel:
@@ -23,11 +38,15 @@ class OnlineAppearanceModel:
         center: tuple[float, float],
         target_size: tuple[float, float],
         foreground_mask: np.ndarray | None = None,
+        local_refine: bool = False,
+        subpixel: bool = False,
     ) -> None:
         self.target_size = (
             max(8.0, float(target_size[0])),
             max(8.0, float(target_size[1])),
         )
+        self.local_refine = bool(local_refine)
+        self.subpixel = bool(subpixel)
         self.anchor_template = _extract_patch(gray, center, self.target_size)
         self.short_template = self.anchor_template.copy()
         self.foreground_mask = _normalize_mask(
@@ -86,6 +105,7 @@ class OnlineAppearanceModel:
     ) -> AppearanceMatch | None:
         radius = max(6, int(search_radius))
         candidates = {self._clamp_center(gray, predicted_center)}
+        template_matches: list[TemplateMatch] = []
 
         for template in (self.anchor_template, self.short_template):
             match = _match_template(
@@ -93,9 +113,11 @@ class OnlineAppearanceModel:
                 template,
                 predicted_center,
                 search_radius=radius,
+                subpixel=self.subpixel,
             )
             if match is not None:
-                candidates.add(self._clamp_center(gray, match))
+                template_matches.append(match)
+                candidates.add(self._clamp_center(gray, match.center))
 
         step = max(3, int(round(max(radius / 8.0, min(self.target_size) / 5.0))))
         for dy in range(-radius, radius + 1, step):
@@ -124,6 +146,52 @@ class OnlineAppearanceModel:
                     center=center,
                     score=float(ranked_score),
                     anchor_score=float(anchor_score),
+                )
+        if best is not None and self.local_refine:
+            refine_radius = max(1, min(3, int(np.ceil(step / 2.0))))
+            local_centers = {
+                self._clamp_center(gray, (best.center[0] + dx, best.center[1] + dy))
+                for dy in range(-refine_radius, refine_radius + 1)
+                for dx in range(-refine_radius, refine_radius + 1)
+            }
+            for center in local_centers:
+                appearance_score = self.score(gray, center)
+                anchor_score = _template_similarity(
+                    gray, self.anchor_template, center, self.target_size,
+                    self.foreground_mask,
+                )
+                distance = hypot(
+                    center[0] - predicted_center[0], center[1] - predicted_center[1],
+                )
+                ranked_score = appearance_score - 0.08 * min(
+                    1.0, distance / max(radius, 1),
+                )
+                if ranked_score > best.score:
+                    best = AppearanceMatch(
+                        center=center, score=float(ranked_score),
+                        anchor_score=float(anchor_score),
+                        refinement_status="integer_local_refine",
+                    )
+        if best is not None and template_matches:
+            nearest = min(
+                template_matches,
+                key=lambda item: hypot(
+                    item.center[0] - best.center[0], item.center[1] - best.center[1],
+                ),
+            )
+            if hypot(nearest.center[0] - best.center[0], nearest.center[1] - best.center[1]) <= max(2.0, step):
+                best = AppearanceMatch(
+                    center=best.center, score=best.score,
+                    anchor_score=best.anchor_score,
+                    peak_score=nearest.peak_score,
+                    second_peak_margin=nearest.second_peak_margin,
+                    peak_to_sidelobe_ratio=nearest.peak_to_sidelobe_ratio,
+                    subpixel_offset=nearest.subpixel_offset,
+                    refinement_status=(
+                        nearest.refinement_status
+                        if nearest.refinement_status != "disabled"
+                        else best.refinement_status
+                    ),
                 )
         return best
 
@@ -312,7 +380,8 @@ def _match_template(
     predicted_center: tuple[float, float],
     *,
     search_radius: int,
-) -> tuple[float, float] | None:
+    subpixel: bool = False,
+) -> TemplateMatch | None:
     height, width = gray.shape[:2]
     template_height, template_width = template.shape[:2]
     cx, cy = predicted_center
@@ -324,11 +393,56 @@ def _match_template(
     if search.shape[0] < template_height or search.shape[1] < template_width:
         return None
     response = cv2.matchTemplate(search, template, cv2.TM_CCOEFF_NORMED)
-    _, _, _, max_location = cv2.minMaxLoc(response)
-    return (
-        float(x1 + max_location[0] + template_width / 2.0),
-        float(y1 + max_location[1] + template_height / 2.0),
+    _, peak, _, max_location = cv2.minMaxLoc(response)
+    px, py = max_location
+    offset_x = offset_y = 0.0
+    status = "disabled"
+    if subpixel:
+        offset_x, offset_y, status = _subpixel_peak(response, px, py)
+    exclusion = response.copy()
+    ey1, ey2 = max(0, py - 1), min(response.shape[0], py + 2)
+    ex1, ex2 = max(0, px - 1), min(response.shape[1], px + 2)
+    exclusion[ey1:ey2, ex1:ex2] = -np.inf
+    finite_sidelobes = exclusion[np.isfinite(exclusion)]
+    second = float(np.max(finite_sidelobes)) if finite_sidelobes.size else float(peak)
+    finite_response = response[np.isfinite(response)]
+    mean = float(np.mean(finite_response)) if finite_response.size else 0.0
+    std = float(np.std(finite_response)) if finite_response.size else 0.0
+    psr = (float(peak) - mean) / max(std, 1e-6)
+    return TemplateMatch(
+        center=(
+            float(x1 + px + offset_x + template_width / 2.0),
+            float(y1 + py + offset_y + template_height / 2.0),
+        ),
+        peak_score=float(peak),
+        second_peak_margin=float(peak) - second,
+        peak_to_sidelobe_ratio=float(psr),
+        subpixel_offset=(float(offset_x), float(offset_y)),
+        refinement_status=status,
     )
+
+
+def _subpixel_peak(
+    response: np.ndarray, x: int, y: int,
+) -> tuple[float, float, str]:
+    if x <= 0 or y <= 0 or x >= response.shape[1] - 1 or y >= response.shape[0] - 1:
+        return 0.0, 0.0, "fallback_boundary"
+
+    def axis_offset(left: float, center: float, right: float) -> float | None:
+        curvature = left - 2.0 * center + right
+        if not np.isfinite(curvature) or curvature >= -1e-6:
+            return None
+        value = 0.5 * (left - right) / curvature
+        if not np.isfinite(value) or abs(value) > 0.5:
+            return None
+        return float(value)
+
+    center = float(response[y, x])
+    dx = axis_offset(float(response[y, x - 1]), center, float(response[y, x + 1]))
+    dy = axis_offset(float(response[y - 1, x]), center, float(response[y + 1, x]))
+    if dx is None or dy is None:
+        return 0.0, 0.0, "fallback_flat_or_unstable"
+    return dx, dy, "subpixel_parabolic"
 
 
 def _normalize_mask(

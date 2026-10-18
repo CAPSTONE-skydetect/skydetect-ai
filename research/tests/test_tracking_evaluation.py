@@ -2,6 +2,8 @@ import csv
 import json
 from pathlib import Path
 
+import cv2
+import numpy as np
 import pytest
 
 from research.tracking_evaluation import (
@@ -9,6 +11,8 @@ from research.tracking_evaluation import (
     evaluate_dataset,
     evaluate_files,
     load_video_geometry,
+    write_comparison_video,
+    _temporal_metrics,
 )
 
 
@@ -179,6 +183,87 @@ def test_dataset_manifest_writes_machine_and_human_reports(tmp_path: Path) -> No
     assert summary_json["aggregate"]["micro"][
         "attempted_window_observation_ratio"
     ] == pytest.approx(2 / 3)
+
+
+def test_writes_gt_comparison_video(tmp_path: Path) -> None:
+    gt_path, trajectory_path, metadata_path = _write_sample_files(tmp_path)
+    overlay_path = tmp_path / "overlay.mp4"
+    writer = cv2.VideoWriter(
+        str(overlay_path), cv2.VideoWriter_fourcc(*"mp4v"), 10.0, (50, 24)
+    )
+    assert writer.isOpened()
+    for _ in range(3):
+        writer.write(np.zeros((24, 50, 3), dtype=np.uint8))
+    writer.release()
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["processed_height"] = 24
+    metadata["original_to_processed"] = [
+        [0.5, 0.0, 0.0],
+        [0.0, 0.48, 0.0],
+        [0.0, 0.0, 1.0],
+    ]
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    output_path = tmp_path / "comparison.mp4"
+
+    result = write_comparison_video(
+        cvat_xml=gt_path,
+        trajectory_csv=trajectory_path,
+        metadata_json=metadata_path,
+        overlay_video=overlay_path,
+        output_video=output_path,
+        sample_id="sample-a",
+        track_id=0,
+    )
+
+    assert result["frames_written"] == 3
+    assert result["matched_frames"] == 2
+    assert result["gt_frames_missing_prediction"] == 1
+    assert output_path.exists()
+    capture = cv2.VideoCapture(str(output_path))
+    ok, rendered = capture.read()
+    capture.release()
+    assert ok
+    assert np.count_nonzero(rendered) > 0
+
+
+def _temporal_frame(index: int, gt: tuple[float, float], a: tuple[float, float]) -> dict:
+    return {"frame_index": index, "timestamp_ms": index * 100,
+            "gt_center": list(gt), "prediction_center": list(a)}
+
+
+def test_constant_center_bias_does_not_change_motion() -> None:
+    frames = [_temporal_frame(i, (i * 2, 0), (i * 2 + 10, -4)) for i in range(4)]
+    result = _temporal_metrics(frames, list(range(4)))
+    assert result["error_change_px"]["max"] == 0
+    assert result["velocity_vector_error_px_s"]["max"] == 0
+    assert result["path_length_ratio"] == 1
+
+
+def test_error_change_uses_vectors_and_timestamp_intervals() -> None:
+    frames = [_temporal_frame(0, (0, 0), (2, 0)),
+              _temporal_frame(1, (0, 0), (-2, 0))]
+    result = _temporal_metrics(frames, [0, 1])
+    assert result["error_change_px"]["median"] == 4
+    assert result["velocity_vector_error_px_s"]["median"] == 40
+    assert result["path_length_ratio"] is None
+
+
+def test_temporal_metrics_do_not_bridge_missing_frames() -> None:
+    frames = [_temporal_frame(0, (0, 0), (0, 0)),
+              _temporal_frame(2, (4, 0), (100, 0)),
+              _temporal_frame(3, (6, 0), (102, 0))]
+    result = _temporal_metrics(frames, [0, 1, 2, 3])
+    assert result["pair_count"] == 1
+    assert result["pair_coverage"] == pytest.approx(1 / 3)
+    assert result["prediction_path_length_px"] == 2
+    assert result["path_length_ratio"] == 1
+
+
+def test_temporal_metrics_have_explicit_empty_state() -> None:
+    result = _temporal_metrics([_temporal_frame(0, (0, 0), (0, 0))], [0])
+    assert result["pair_coverage"] is None
+    assert result["error_change_px"]["median"] is None
+    assert result["path_length_ratio"] is None
 
 
 def _write_sample_files(
