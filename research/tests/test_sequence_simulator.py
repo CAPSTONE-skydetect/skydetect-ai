@@ -78,6 +78,59 @@ def test_camera_range_does_not_cancel_actual_flight_speed():
     assert original["track"]["history"] == doubled_speed_annotation["track"]["history"]
 
 
+def test_bounded_camera_distance_changes_projection_without_moving_flight():
+    flight = latent_flight("bird", "seagull", 88, duration=3)
+    common = dict(ground_camera=True, span_q10=.01, span_q50=.02, span_q90=.03,
+                  dropout_rate=0, burst_probability=0, drift_probability=0)
+    baseline = observe_flight(flight, AcquisitionProfile(**common))
+    closer = observe_flight(flight, AcquisitionProfile(**common, max_camera_distance_m=300))
+    assert baseline["world_truth"] == closer["world_truth"]
+    assert closer["metadata"]["camera_distance_m"] <= 300
+    assert closer["metadata"]["camera"]["position"][2] == pytest.approx(1.5)
+    assert not closer["metadata"]["camera_cap_exceeded_for_ground_geometry"]
+    assert closer["metadata"]["camera_distance_m"] < baseline["metadata"]["camera_distance_m"]
+    with pytest.raises(ValueError, match="Camera distance limit"):
+        AcquisitionProfile(max_camera_distance_m=19)
+
+
+def test_default_camera_distance_range_and_explicit_historical_profile():
+    current = AcquisitionProfile()
+    assert (current.min_camera_distance_m, current.max_camera_distance_m) == (50., 500.)
+    historical = AcquisitionProfile(min_camera_distance_m=20., max_camera_distance_m=1500.)
+    assert (historical.min_camera_distance_m, historical.max_camera_distance_m) == (20., 1500.)
+    saved = AcquisitionProfile.from_saved({})
+    assert (saved.min_camera_distance_m, saved.max_camera_distance_m) == (20., 1500.)
+    assert AcquisitionProfile.from_saved(asdict(current)) == current
+    with pytest.raises(ValueError, match="Camera distance limit"):
+        AcquisitionProfile(min_camera_distance_m=501.)
+
+
+def test_ground_geometry_override_is_reported_when_camera_cap_is_impossible():
+    flight = latent_flight("bird", "seagull", 88, duration=3)
+    raised = deepcopy(flight)
+    for row in raised["world_truth"]:
+        row["position_m"][2] += 300
+    observed = observe_flight(raised, AcquisitionProfile(ground_camera=True,
+                              max_camera_distance_m=200))
+    assert observed["metadata"]["camera_cap_exceeded_for_ground_geometry"]
+    assert observed["metadata"]["camera_distance_m"] > 200
+    assert observed["metadata"]["camera"]["position"][2] == pytest.approx(1.5)
+
+
+def test_flap_force_candidate_changes_bird_only_and_retains_force_bounds():
+    baseline = latent_flight("bird", "pigeon", 88, duration=3)
+    stronger = latent_flight("bird", "pigeon", 88, duration=3, bird_flap_force_scale=1.5)
+    assert stronger["physical_parameters"]["lift_modulation"] == pytest.approx(
+        1.5*baseline["physical_parameters"]["lift_modulation"])
+    assert stronger["world_truth"] != baseline["world_truth"]
+    assert stronger["latent_failure"] is None
+    assert latent_flight("drone", "consumer_quad", 88, duration=3,
+                         bird_flap_force_scale=1.5)["world_truth"] == latent_flight(
+                             "drone", "consumer_quad", 88, duration=3)["world_truth"]
+    with pytest.raises(ValueError, match="Bird flap force scale"):
+        latent_flight("bird", "pigeon", 88, bird_flap_force_scale=3)
+
+
 def test_scope_excludes_fixed_wing_without_removing_legacy_support():
     with pytest.raises(ValueError, match="scope"):
         latent_flight("drone", "fixed_wing_drone", 1)

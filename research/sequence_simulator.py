@@ -13,7 +13,7 @@ from .observation import NoiseConfig, ObservationModel
 from .pipeline import stable_seed
 
 
-SEQUENCE_SIMULATOR_VERSION = "sequence-guidance-1.5.0"
+SEQUENCE_SIMULATOR_VERSION = "sequence-guidance-1.6.0"
 BIRDS = ("pigeon", "seagull", "falcon")
 QUADS = ("consumer_quad", "racing_quad", "hover_quad")
 
@@ -41,6 +41,15 @@ class AcquisitionProfile:
     camera_height_m: float = 1.5
     ground_min_fov_deg: float = 5.
     wing_centroid_ratio: float = 0.
+    min_camera_distance_m: float = 50.
+    max_camera_distance_m: float = 500.
+
+    @classmethod
+    def from_saved(cls, values):
+        saved = dict(values)
+        saved.setdefault("min_camera_distance_m", 20.)
+        saved.setdefault("max_camera_distance_m", 1500.)
+        return cls(**saved)
 
     def __post_init__(self):
         values = [v for k, v in asdict(self).items() if k != "name"]
@@ -56,6 +65,8 @@ class AcquisitionProfile:
             raise ValueError("Invalid ground camera height/mode")
         if not 1 < self.ground_min_fov_deg <= self.fov_low_deg:
             raise ValueError("Invalid ground camera field of view")
+        if not 20 <= self.min_camera_distance_m <= self.max_camera_distance_m <= 1500:
+            raise ValueError("Camera distance limits must satisfy 20 <= min <= max <= 1500 m")
         if not 0 <= self.wing_centroid_ratio <= .25:
             raise ValueError("Wing centroid ratio must be between zero and 0.25")
         self.noise_config()
@@ -121,12 +132,15 @@ class CommandSchedule:
         return next((s for s in self.segments if time < s["end_s"]-1e-10), self.segments[-1])
 
 
-def latent_flight(label, subtype, seed, duration=8.0, fps=30, guidance=None):
+def latent_flight(label, subtype, seed, duration=8.0, fps=30, guidance=None,
+                  bird_flap_force_scale=1.0):
     allowed = BIRDS if label == "bird" else QUADS if label == "drone" else ()
     if subtype not in allowed:
         raise ValueError("Sequence scope is birds and multicopters")
     if not np.isfinite([duration, fps]).all() or duration <= 0 or fps <= 0:
         raise ValueError("Invalid flight duration/rate")
+    if not np.isfinite(bird_flap_force_scale) or not .5 <= bird_flap_force_scale <= 2.:
+        raise ValueError("Bird flap force scale must be between 0.5 and 2")
     rng = np.random.default_rng(stable_seed(seed, label, subtype, "latent"))
     yaw = float(rng.uniform(-np.pi, np.pi))
     direction = np.array([np.cos(yaw), np.sin(yaw), 0.0])
@@ -137,6 +151,9 @@ def latent_flight(label, subtype, seed, duration=8.0, fps=30, guidance=None):
     kwargs = dict(start_pos=[0, 0, 120], heading=direction, rng=rng)
     agent = BirdDyn(env, species=subtype, **kwargs) if label == "bird" else DroneDyn(env, model=subtype, **kwargs)
     scaling = agent.randomize_individual(rng)
+    if label == "bird":
+        for key in ("lift_modulation", "thrust_modulation"):
+            agent.config[key] *= bird_flap_force_scale
     if label == "drone":
         agent.v_ground = direction * float(rng.uniform(0, 8))
         agent.s = float(np.linalg.norm(agent.v_ground-env.wind))
@@ -207,7 +224,8 @@ def latent_flight(label, subtype, seed, duration=8.0, fps=30, guidance=None):
                 schedule=schedule.segments, template=list(schedule.template), world_truth=rows,
                 latent_failure=failure, scaling=scaling, width_m=agent.real_width, height_m=agent.real_height,
                 wing_frequency_hz=float(agent.flap_hz), wing_phase_rad=float(agent.flap_phase),
-                physical_parameters=agent.config, simulator=SEQUENCE_SIMULATOR_VERSION,
+                physical_parameters=agent.config, bird_flap_force_scale=bird_flap_force_scale,
+                simulator=SEQUENCE_SIMULATOR_VERSION,
                 guidance=asdict(guidance or GuidanceProfile()))
 
 
@@ -227,7 +245,8 @@ def observe_flight(flight, profile):
     # object's actual speed. Per-flight speed compensation would erase that signal.
     reference_travel = 30.
     fov = float(rng.uniform(profile.fov_low_deg, profile.fov_high_deg))
-    distance = float(np.clip(reference_travel/(2*np.tan(np.radians(fov)/2)*span), 20., 1500.))
+    distance = float(np.clip(reference_travel/(2*np.tan(np.radians(fov)/2)*span),
+                             profile.min_camera_distance_m, profile.max_camera_distance_m))
     requested_distance = distance
     if profile.ground_camera:
         vertical = float(center[2] - profile.camera_height_m)
@@ -269,6 +288,8 @@ def observe_flight(flight, profile):
                               camera=camera.to_dict(), requested_two_second_span=span,
                               camera_distance_m=distance, schedule=flight["schedule"],
                               requested_camera_distance_m=requested_distance,
+                              camera_cap_exceeded_for_ground_geometry=bool(
+                                  distance > profile.max_camera_distance_m + 1e-9),
                               actual_elevation_deg=float(np.degrees(elevation)),
                               guidance=flight.get("guidance", asdict(GuidanceProfile())),
                               template=flight["template"], latent_failure=flight["latent_failure"],

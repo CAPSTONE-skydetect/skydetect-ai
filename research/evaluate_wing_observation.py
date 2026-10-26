@@ -100,7 +100,7 @@ def run(dataset, reference, output):
         evidence = fold_data[fold]
         if fold != evidence["fold"] or fit != set(evidence["fit_groups"]) or held != set(evidence["held_groups"]):
             raise ValueError("Saved fold membership changed")
-        profiles = [AcquisitionProfile(**p) for p in evidence["profiles"]]
+        profiles = [AcquisitionProfile.from_saved(p) for p in evidence["profiles"]]
         control = next(p for p in profiles if p.name == "ground_span2.0")
         candidate = paired_candidate(control)
         guidance = GuidanceProfile(**evidence["guidance"])
@@ -122,7 +122,7 @@ def run(dataset, reference, output):
     plot_cv(output)
     gate = cv_gate(table)
     write_json(output/"cv_gate.json",gate)
-    control = AcquisitionProfile(**selected["profile"])
+    control = AcquisitionProfile.from_saved(selected["profile"])
     candidate = paired_candidate(control)
     frozen = dict(profile=asdict(candidate), guidance=selected["guidance"],
         fit_on_train_only=True, cv_gate=gate, protocol_sha256=file_hash(output/"protocol.json"))

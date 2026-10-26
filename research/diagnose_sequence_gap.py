@@ -165,7 +165,7 @@ def run(dataset, reference, output, audit_path):
     selected = json.loads((reference/"selected_profile.json").read_text(encoding="utf-8"))
     if selected["contract_id"] != cfg.fingerprint:
         raise ValueError("Saved simulator input contract mismatch")
-    profile = AcquisitionProfile(**selected["profile"])
+    profile = AcquisitionProfile.from_saved(selected["profile"])
     flights = list(read_jsonl(reference/"fit_latent_flights.jsonl"))
     records = list(read_jsonl(reference/"after_fit_tracks.jsonl"))
     output.mkdir(parents=True, exist_ok=True)
