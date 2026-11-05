@@ -26,6 +26,13 @@ _PLAYABLE_PIX_FMT = "yuv420p"
 
 _TIMEOUT_SEC = 600
 
+# 4K 원본을 그대로 다시 인코딩하면 ffmpeg 하나가 4GB 넘게 써서 컨테이너가 OOM 으로 죽는다.
+# 추적은 어차피 가로 1280 으로 줄여서 하므로 변환본은 가로 1920 까지만 남긴다.
+# 좌표는 업로드 직후 변환본에서 읽은 metadata 기준이라 ROI 위치가 어긋나지 않는다.
+_MAX_WIDTH = 1920
+# 스레드를 코어 수만큼 띄우면 스레드마다 프레임 버퍼를 잡아 메모리가 같이 늘어난다.
+_FFMPEG_THREADS = 4
+
 
 class VideoTranscodeError(RuntimeError):
     pass
@@ -63,8 +70,9 @@ def ensure_browser_playable(path: Path) -> TranscodeResult:
         "-map", "0:v:0",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
         "-pix_fmt", _PLAYABLE_PIX_FMT,
-        # yuv420p 는 가로세로가 짝수여야 한다. 홀수면 1px 줄인다.
-        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+        # 가로를 _MAX_WIDTH 이하로 줄이고(비율 유지), yuv420p 를 위해 가로세로를 짝수로 맞춘다.
+        "-vf", f"scale=trunc(min(iw\\,{_MAX_WIDTH})/2)*2:-2",
+        "-threads", str(_FFMPEG_THREADS),
         # 프레임 수를 원본과 같게 유지한다. ROI 프레임 번호가 그대로 맞아야 한다.
         "-fps_mode", "passthrough",
         "-an",
