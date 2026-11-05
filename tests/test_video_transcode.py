@@ -79,6 +79,43 @@ def test_mpg_program_stream_is_transcoded_to_mp4(tmp_path):
     assert frames == original_frames
 
 
+def test_wide_video_is_downscaled_to_max_width_with_same_frame_count(tmp_path):
+    source = tmp_path / "clip.mov"
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-v", "error",
+            "-f", "lavfi", "-i", "testsrc=size=2561x1441:rate=30:duration=0.5",
+            "-c:v", "mjpeg", str(source),
+        ],
+        check=True,
+    )
+    _, original_frames = _codec_and_frames(source)
+
+    result = ensure_browser_playable(source)
+
+    capture = cv2.VideoCapture(str(result.path))
+    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    capture.release()
+    assert result.transcoded is True
+    assert width == 1920
+    assert height % 2 == 0 and abs(height - 1441 * 1920 / 2561) <= 2
+    _, frames = _codec_and_frames(result.path)
+    assert frames == original_frames
+
+
+def test_odd_size_small_video_keeps_size_rounded_to_even(tmp_path):
+    source = tmp_path / "clip.avi"
+    _make_video(source, ["-c:v", "mjpeg"])
+
+    result = ensure_browser_playable(source)
+
+    capture = cv2.VideoCapture(str(result.path))
+    assert int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)) == 320
+    assert int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)) == 240
+    capture.release()
+
+
 def test_h264_yuv420p_mp4_is_left_untouched(tmp_path):
     source = tmp_path / "clip.mp4"
     _make_video(
