@@ -50,10 +50,15 @@ precision motion features on variable-rate camera recordings.
 python3 skydetect-ai/hardware/raspberry-pi/test_local.py
 ```
 
-Nine tests cover HLS session query handling, progress identity, remote source
+Twelve tests cover HLS session query handling, progress identity, remote source
 syntax, segment names, CSRF, interrupted-job persistence and an actual FFmpeg
 non-frame-aligned cut of synthetic 1080p video, invalid ROI and interval rejection.
 These unit tests are not real-Pi validation.
+
+SQLite uses DELETE journaling with explicitly closed per-request connections;
+do not inspect a running bind-mounted database from a second host SQLite process.
+Use authenticated APIs for live inspection. A stopped-service backup is preferred
+before maintenance. See `STORAGE_FIX_20261106.md` for the save-race regression.
 
 Actual camera clip/ROI/classification/restart/soak checks remain required before
 calling this complete. See installation-root `PI_FLOW_01_RESULTS.md`.

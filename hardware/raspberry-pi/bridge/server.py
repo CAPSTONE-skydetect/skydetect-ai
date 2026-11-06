@@ -6,6 +6,7 @@ inside the Compose network; the frontend reverse proxy is the sole route in.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextlib import contextmanager
 from email.utils import formatdate
 import hashlib
 import http.server
@@ -48,13 +49,20 @@ _DB_LOCK = threading.RLock()
 _SPACE_LOCK = threading.Lock()
 
 
-def connect() -> sqlite3.Connection:
+@contextmanager
+def connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     connection = sqlite3.connect(DB_PATH, timeout=30)
     connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA journal_mode=WAL")
+    # Runtime DB lives on a macOS/Docker bind mount. Avoid WAL's shared-memory
+    # coordination across host/VM boundaries; keep one service as the DB owner.
+    connection.execute("PRAGMA journal_mode=DELETE")
     connection.execute("PRAGMA foreign_keys=ON")
-    return connection
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def initialize_db() -> None:
@@ -236,6 +244,15 @@ def _write_pin(path: Path, clip_id: str) -> Path:
 
 
 def _copy_stable_segment(source: Path, destination: Path) -> bool:
+    # fMP4 is flushed in parts; a temporarily quiet file is not finalized.
+    # MediaMTX opens the next segment only after finishing its predecessor.
+    start = parse_segment_time(source)
+    if start is None or not any(
+        p.is_file() and not p.is_symlink() and
+        (parse_segment_time(p) or 0) > start
+        for p in source.parent.glob("*.mp4")
+    ):
+        return False
     if not stable_file(source):
         return False
     before = source.stat()
@@ -360,6 +377,20 @@ def requested_window_covered(parts: list[Path], start_epoch: float, end_epoch: f
     return bool(coverage and coverage[0] <= start_epoch + 0.06 and coverage[1] >= end_epoch - 0.08)
 
 
+def parts_overlapping_window(parts: list[Path], start_epoch: float, end_epoch: float) -> list[Path]:
+    selected = []
+    for part in parts:
+        start = parse_segment_time(part)
+        if start is None or start >= end_epoch:
+            continue
+        raw = probe_video(part)
+        stream = (raw.get("streams") or [{}])[0]
+        duration = float((raw.get("format") or {}).get("duration") or stream.get("duration") or 0)
+        if start + duration > start_epoch:
+            selected.append(part)
+    return selected
+
+
 def _concat_file(parts: list[Path], work_dir: Path) -> Path:
     target = work_dir / "segments.ffconcat"
     lines = ["ffconcat version 1.0"]
@@ -371,9 +402,8 @@ def _concat_file(parts: list[Path], work_dir: Path) -> Path:
 
 
 def _extract_clip(parts: list[Path], stage: Path, output: Path, start_epoch: float, end_epoch: float) -> dict:
+    parts = parts_overlapping_window(parts, start_epoch, end_epoch)
     segment_meta, all_frames = inspect_segments(parts)
-    first_start = segment_meta[0]["start_epoch"]
-    relative_start = start_epoch - first_start
     selected = [frame for frame in all_frames
                 if start_epoch <= frame["server_media_epoch"] < end_epoch]
     if len(selected) < 2 or selected[0]["server_media_epoch"] > start_epoch + 0.06:
@@ -382,12 +412,15 @@ def _extract_clip(parts: list[Path], stage: Path, output: Path, start_epoch: flo
         raise RuntimeError("requested_post_roll_not_covered_by_source_frames")
     selected_start = selected[0]["server_media_epoch"]
     selected_end = selected[-1]["server_media_epoch"]
+    first_index = all_frames.index(selected[0])
+    last_index = first_index + len(selected) - 1
     # Re-encode at the original 1080p with the installed software H.264 encoder
     # to make -3s/+10s frame-accurate and seekable. No scaling is applied.
     concat = _concat_file(parts, stage)
     temporary = output.with_suffix(".partial.mp4")
     command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0",
-               "-i", str(concat), "-ss", f"{relative_start:.6f}", "-t", f"{end_epoch - start_epoch:.6f}",
+               "-i", str(concat),
+               "-vf", f"select=between(n\\,{first_index}\\,{last_index}),setpts=PTS-STARTPTS",
                "-map", "0:v:0", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                "-fps_mode", "passthrough", "-video_track_timescale", "90000", "-movflags", "+faststart",
                str(temporary)]
@@ -469,7 +502,7 @@ def _clip_worker(clip_id: str) -> None:
                 if requested_window_covered(candidates, start_epoch, end_epoch):
                     # Now that the requested tail exists, strict continuity and
                     # per-frame PTS checks can fail the job without racing capture.
-                    inspect_segments(candidates)
+                    inspect_segments(parts_overlapping_window(candidates, start_epoch, end_epoch))
                     break
             time.sleep(0.5)
         else:

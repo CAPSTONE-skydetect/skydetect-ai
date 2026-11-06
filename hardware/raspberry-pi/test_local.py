@@ -48,6 +48,37 @@ class LocalTests(unittest.TestCase):
         self.assertFalse(bridge.csrf_ok('XSRF-TOKEN=abc', 'other'))
         self.assertTrue(bridge.csrf_ok('XSRF-TOKEN=abc', 'abc'))
 
+    def test_quiet_active_segment_is_not_finalized(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root/'2026-11-06_16-00-00-000000_+0900.mp4'
+            source.write_bytes(b'first-flushed-part')
+            target = root/'copy/segment.mp4'
+            with patch.object(bridge, 'stable_file', return_value=True):
+                self.assertFalse(bridge._copy_stable_segment(source, target))
+                self.assertFalse(target.exists())
+                # A later flush completes the file before MediaMTX opens its successor.
+                source.write_bytes(b'complete-video-with-all-parts')
+                (root/'2026-11-06_16-00-11-000000_+0900.mp4').write_bytes(b'new-part')
+                self.assertTrue(bridge._copy_stable_segment(source, target))
+                self.assertEqual(target.read_bytes(), source.read_bytes())
+
+    def test_irrelevant_segments_are_excluded(self):
+        paths = [Path('2026-11-06_16-00-00-000000_+0900.mp4'),
+                 Path('2026-11-06_16-00-11-000000_+0900.mp4'),
+                 Path('2026-11-06_16-00-22-000000_+0900.mp4')]
+        start = bridge.parse_segment_time(paths[0])
+        with patch.object(bridge, 'probe_video', return_value={'format':{'duration':11}}):
+            self.assertEqual(bridge.parts_overlapping_window(paths, start+12, start+20), [paths[1]])
+
+    def test_real_pts_gap_is_still_rejected(self):
+        part = Path('2026-11-06_16-00-00-000000_+0900.mp4')
+        media = {'width':1920, 'height':1080, 'start_time':'0', 'duration':'0.3'}
+        frames = [{'pts':value,'duration':1/30,'key':int(value == 0)} for value in [0,1/30,0.233]]
+        with patch.object(bridge, '_ffprobe_frames', return_value=(media, frames)):
+            with self.assertRaisesRegex(RuntimeError, 'intra_segment_pts_gap'):
+                bridge.inspect_segments([part])
+
     def test_invalid_roi_never_starts_analysis(self):
         row = {'status':'READY', 'metadata_json':'{"frameCount":390,"width":1920,"height":1080,"durationMs":12967}',
                'frame_map_json':'[0.033]'}
@@ -76,12 +107,15 @@ class LocalTests(unittest.TestCase):
                                 STAGE_DIR=root/'stage', PIN_DIR=root/'pins'):
                 bridge.initialize_db()
                 with bridge.connect() as db:
+                    self.assertEqual(db.execute('PRAGMA journal_mode').fetchone()[0], 'delete')
                     db.execute("INSERT INTO clips(clip_id,status,created_at,ready_at,trigger_server_epoch,display_mapping,requested_start_epoch,requested_end_epoch,timing_json) VALUES('clip_test','PENDING',0,1,0,'unknown',0,1,'{}')")
                 bridge.initialize_db()
                 with bridge.connect() as db:
                     row = db.execute('SELECT status,error FROM clips').fetchone()
                 self.assertEqual(row['status'], 'FAILED')
                 self.assertIn('restarted', row['error'])
+                with self.assertRaises(bridge.sqlite3.ProgrammingError):
+                    db.execute('SELECT 1')
 
     @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'ffmpeg required')
     def test_real_encoder_non_frame_aligned_cut(self):
