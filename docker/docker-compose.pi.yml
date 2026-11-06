@@ -1,0 +1,42 @@
+services:
+  clip-bridge:
+    image: skydetect-pi-local-ai-rf
+    command: ["python", "/bridge/server.py"]
+    environment:
+      PI_BRIDGE_DB: /runtime/local-bridge/jobs.sqlite3
+      PI_RECORDING_DIR: /runtime/recordings/pi
+      PI_CLIPS_DIR: /runtime/clips
+      PI_STAGE_DIR: /runtime/local-bridge/staging
+      PI_PIN_DIR: /runtime/pins/segments
+      PI_RELAY_STATE: /runtime/status/state.json
+      PI_BACKEND_URL: http://backend:8080
+      PI_RF_URL: http://ai-rf:8000
+      PI_MINIROCKET_URL: http://ai-minirocket:8000
+      PI_CLIP_MAX_BYTES: "4294967296"
+      TZ: Asia/Seoul
+    volumes:
+      - ../hardware/raspberry-pi/bridge:/bridge:ro
+      - ../../../outputs/pi-live-20261106/recordings:/runtime/recordings:ro
+      - ../../../outputs/pi-live-20261106/status:/runtime/status:ro
+      - ../../../outputs/pi-live-20261106/clips:/runtime/clips
+      - ../../../outputs/pi-live-20261106/local-bridge:/runtime/local-bridge
+      - ../../../outputs/pi-live-20261106/pins:/runtime/pins
+    user: "501:20"
+    depends_on:
+      - backend
+      - ai-rf
+      - ai-minirocket
+    expose:
+      - "8080"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      args:
+        VITE_CLIP_SOURCE: local
+        VITE_ANALYSIS_SOURCE: ai
+        VITE_HLS_URL: http://127.0.0.1:18888/pi/index.m3u8
+    volumes:
+      - ../hardware/raspberry-pi/nginx.pi.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - clip-bridge
