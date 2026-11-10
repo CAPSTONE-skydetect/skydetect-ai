@@ -1,4 +1,15 @@
 services:
+  # Shared A profiles only. RF/MiniRocket checkpoints and B/C code stay in their images.
+  ai-rf:
+    volumes:
+      - ../ai_server/tracking_schemas.py:/app/ai_server/tracking_schemas.py:ro
+      - ../ai_server/services/manual_roi_tracker.py:/app/ai_server/services/manual_roi_tracker.py:ro
+
+  ai-minirocket:
+    volumes:
+      - ../ai_server/tracking_schemas.py:/app/ai_server/tracking_schemas.py:ro
+      - ../ai_server/services/manual_roi_tracker.py:/app/ai_server/services/manual_roi_tracker.py:ro
+
   backend:
     environment:
       SKYDETECT_CLIPS_WORKER_URL: http://clip-bridge:8080

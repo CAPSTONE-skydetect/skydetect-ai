@@ -84,6 +84,8 @@ def process_manual_roi_video(
     write_overlay: bool = True,
 ) -> ManualTrackingResult:
     tuning = tuning or TrackingTuning()
+    temporal_klt_enabled = tuning.tracker_variant != "d0"
+    motion_handoff_enabled = tuning.tracker_variant == "central_handoff_v1"
     metadata_obj = read_tracking_video_metadata(
         video_path,
         resize_width=resize_width,
@@ -153,7 +155,12 @@ def process_manual_roi_video(
         direction="forward",
         tuning=tuning,
         foreground_mask=foreground.mask,
+        temporal_klt_enabled=temporal_klt_enabled,
+        motion_handoff_enabled=motion_handoff_enabled,
     )
+    metadata["tracker_variant"] = tuning.tracker_variant
+    if motion_handoff_enabled:
+        metadata["experimental_motion_handoff"] = "central_ellipse_consensus_v1"
 
     last_visible_frame = max(
         observation.frame_index for observation in observations if observation.visible
@@ -295,6 +302,8 @@ def _track_ordered_frames(
     direction: str,
     tuning: TrackingTuning,
     foreground_mask: np.ndarray,
+    temporal_klt_enabled: bool = False,
+    motion_handoff_enabled: bool = False,
 ) -> list[PointObservation]:
     first_index, first_frame = frame_items[0]
     height, width = first_frame.shape[:2]
@@ -430,8 +439,12 @@ def _track_ordered_frames(
         appearance_score = 0.0
         motion_score = 0.0
         fb_error = float(np.mean(fb_errors[good])) if good.any() else 99.0
-        if visible_points >= required_points:
-            displacement = np.median(next_points_2d[good] - points[good], axis=0)
+        displacement_mask = good.copy()
+        if temporal_klt_enabled:
+            radii = np.maximum(np.array(init_bbox[2:4], dtype=np.float32) * 0.25, 3.0)
+            displacement_mask &= np.sum(((points - prev_center) / radii) ** 2, axis=1) <= 1.0
+        if int(displacement_mask.sum()) >= required_points:
+            displacement = np.median(next_points_2d[displacement_mask] - points[displacement_mask], axis=0)
             new_center = prev_center + displacement.astype(np.float32)
             innovation_distance = float(np.linalg.norm(new_center - predicted_center))
             kinematic_gate = max(8.0, max(bbox_w, bbox_h) * 0.55)
@@ -441,7 +454,7 @@ def _track_ordered_frames(
                 tuple(float(value) for value in new_center),
                 radius=max(8, int(max(bbox_w, bbox_h) * 2)),
             )
-            if refined is not None and hypot(
+            if not temporal_klt_enabled and refined is not None and hypot(
                 refined[0] - new_center[0],
                 refined[1] - new_center[1],
             ) <= max(6.0, max(bbox_w, bbox_h)):
@@ -530,9 +543,9 @@ def _track_ordered_frames(
                 8.0,
                 max(bbox_w, bbox_h) * 0.80,
             ):
-                new_center = 0.62 * new_center + 0.38 * np.array(
-                    motion_match.center,
-                    dtype=np.float32,
+                new_center = _combine_motion_support(
+                    new_center, np.array(motion_match.center, dtype=np.float32),
+                    init_bbox[2:4], handoff_enabled=motion_handoff_enabled,
                 )
                 tracking_source = "motion"
             else:
@@ -734,7 +747,10 @@ def _track_ordered_frames(
             float(bbox_w),
             float(bbox_h),
         )
-        if visible:
+        if visible and temporal_klt_enabled and tracking_source == "klt" and good.sum() >= 4:
+            # Keep measured correspondences instead of selecting new texture.
+            points = next_points_2d[good].astype(np.float32)
+        elif visible:
             points = _initialize_roi_points(
                 curr_gray,
                 _clamp_bbox(current_bbox, width=width, height=height),
@@ -747,6 +763,21 @@ def _track_ordered_frames(
         prev_gray = curr_gray
 
     return observations
+
+
+def _combine_motion_support(
+    klt_center: np.ndarray,
+    motion_center: np.ndarray,
+    initial_size: tuple[float, float],
+    *,
+    handoff_enabled: bool,
+) -> np.ndarray:
+    # Motion has already passed the existing confidence/distance/support gates.
+    if handoff_enabled:
+        radii = np.maximum(np.asarray(initial_size, dtype=np.float32) * 0.25, 3.0)
+        if float(np.sum(((klt_center - motion_center) / radii) ** 2)) > 1.0:
+            return motion_center.copy()
+    return 0.62 * klt_center + 0.38 * motion_center
 
 
 def _max_loaded_frames(

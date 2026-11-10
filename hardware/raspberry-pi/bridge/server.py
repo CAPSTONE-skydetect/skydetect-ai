@@ -635,6 +635,7 @@ def _analysis_worker(analysis_id: str) -> None:
             "stabilize": True, "resize_width": 1280, "write_overlay": True,
             "max_seconds": request_data["maxSeconds"],
             "tuning": {"klt_accept_conf": 0.40, "recovery_conf": 0.58, "update_conf": 0.76,
+                       "tracker_variant": request_data.get("trackerVariant", "d0"),
                        "search_radius_multiplier": 2.5, "online_update_enabled": False},
         }
         output = _post_json(base + "/api/tracks/manual", payload)
@@ -864,6 +865,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         bbox = body.get("targetBbox")
         init_frame = body.get("initFrameIndex")
         max_seconds = body.get("maxSeconds")
+        tracker_variant = body.get("trackerVariant", "d0")
+        if tracker_variant not in ("d0", "central_v1", "central_handoff_v1"):
+            self._error(400, "지원하지 않는 추적 방식입니다.")
+            return
         metadata = json.loads(row["metadata_json"])
         if model not in AI_URLS:
             self._error(400, "model은 rf 또는 minirocket이어야 합니다.")
@@ -890,7 +895,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         analysis_id = "local_anl_" + uuid.uuid4().hex
         request_data = {"initFrameIndex": init_frame, "targetBbox": [int(round(v)) for v in bbox],
                         "maxSeconds": duration_s, "intervalStartClipSeconds": start_s,
-                        "intervalEndClipSeconds": start_s + duration_s, "model": model}
+                        "intervalEndClipSeconds": start_s + duration_s, "model": model,
+                        "trackerVariant": tracker_variant}
         with connect() as db:
             db.execute("INSERT INTO analyses(analysis_id,clip_id,status,model,request_json,created_at) VALUES(?,?,?,?,?,?)",
                        (analysis_id, clip_id, "PENDING", model, json.dumps(request_data), time.time()))
