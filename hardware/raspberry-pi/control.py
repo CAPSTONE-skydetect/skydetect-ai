@@ -19,11 +19,40 @@ import urllib.parse
 import urllib.request
 import uuid
 
-PROJECT = Path(__file__).resolve().parents[3]
-ROOT = Path(os.environ.get("PI_RELAY_RUNTIME", str(PROJECT.parent / "outputs/pi-live-20261106"))).resolve()
+AI_REPO = Path(__file__).resolve().parents[2]
+DOCKER_DIR = AI_REPO / "docker"
+PI_ENV = DOCKER_DIR / ".env.pi"
+
+
+def _pi_settings(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    settings = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if separator and key.strip().startswith("PI_"):
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            settings[key.strip()] = value
+    return settings
+
+
+SETTINGS = _pi_settings(PI_ENV)
+
+
+def _setting(name: str, default: str) -> str:
+    return os.environ.get(name, SETTINGS.get(name, default))
+
+
+ROOT = (DOCKER_DIR / Path(_setting("PI_RELAY_RUNTIME", "../../.skydetect-pi")).expanduser()).resolve()
+CAMERA_SSH = _setting("PI_CAMERA_SSH", "")
+FFMPEG = _setting("PI_FFMPEG", "ffmpeg")
 STATE = ROOT / "status/state.json"
 LOCK = ROOT / ".supervisor.lock"
-MEDIA = ROOT / "bin/mediamtx"
+MEDIA = (DOCKER_DIR / Path(_setting("PI_MEDIAMTX", str(ROOT / "bin/mediamtx"))).expanduser()).resolve()
 MEDIA_CONFIG = Path(__file__).resolve().parent / "mediamtx.yml"
 RECORDINGS = ROOT / "recordings/pi"
 PIN_DIR = ROOT / "pins/segments"
@@ -239,7 +268,7 @@ def _launch_capture(state: dict) -> tuple[subprocess.Popen, subprocess.Popen, th
     source = subprocess.Popen(
         ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
          "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2",
-         "doori@172.20.10.2", remote_command],
+         CAMERA_SSH, remote_command],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=camera_log,
         start_new_session=True,
     )
@@ -256,7 +285,7 @@ def _launch_capture(state: dict) -> tuple[subprocess.Popen, subprocess.Popen, th
     heartbeat = threading.Thread(target=renew, name="camera-lease-heartbeat", daemon=True)
     heartbeat.start()
     publisher = subprocess.Popen(
-        ["/opt/homebrew/bin/ffmpeg", "-hide_banner", "-loglevel", "warning",
+        [FFMPEG, "-hide_banner", "-loglevel", "warning",
          "-analyzeduration", "1000000", "-probesize", "65536",
          "-f", "mpegts", "-i", "pipe:0", "-map", "0:v:0", "-an", "-c:v", "copy",
          "-f", "rtsp", "-rtsp_transport", "tcp", "rtsp://127.0.0.1:18554/pi"],
@@ -310,7 +339,7 @@ def _supervisor() -> None:
         state = {
             "instance_id": instance_id, "controller_pid": os.getpid(),
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now)),
-            "started_at_epoch": now, "status": "starting", "camera_host": "doori@172.20.10.2",
+            "started_at_epoch": now, "status": "starting", "camera_host": CAMERA_SSH,
             "hls_url": HLS_URL, "transport": "H264 MPEG-TS over SSH lease -> localhost RTSP stream copy",
             "capture_profile": {"width": 1920, "height": 1080, "fps": 30, "bitrate": 8000000},
             "raw_retention_seconds": 300, "raw_disk_ceiling_bytes": MAX_RAW_BYTES,
@@ -411,6 +440,7 @@ def relay_start() -> dict:
     pid = state.get("controller_pid")
     if state.get("status") in {"starting", "connecting", "running", "reconnecting"} and isinstance(pid, int) and _pid_is_ours(pid):
         return {"status": "already_running", "controller_pid": pid, "hls_url": state.get("hls_url")}
+    _validate_camera_setting()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     with (LOG_DIR / "relay-supervisor.log").open("ab", buffering=0) as log:
         process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "_supervisor"],
@@ -445,21 +475,36 @@ def relay_stop() -> dict:
     return {"status": "stop_requested", "controller_pid": pid}
 
 
+def _validate_camera_setting() -> None:
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*@[A-Za-z0-9][A-Za-z0-9_.-]*", CAMERA_SSH):
+        raise RuntimeError("Set PI_CAMERA_SSH to user@hostname or user@IPv4 in docker/.env.pi.")
+
+
+def _compose_parameters() -> tuple[list[str], dict[str, str]]:
+    command = ["docker", "compose", "--project-name", "skydetect-pi-local", "--env-file", ".env"]
+    if PI_ENV.is_file():
+        command += ["--env-file", str(PI_ENV)]
+    command += ["-f", "docker-compose.yml", "-f", "docker-compose.pi.yml"]
+    env = {**os.environ, "PI_RELAY_RUNTIME": str(ROOT),
+           "PI_LOCAL_UID": _setting("PI_LOCAL_UID", str(os.getuid())),
+           "PI_LOCAL_GID": _setting("PI_LOCAL_GID", str(os.getgid()))}
+    return command, env
+
+
 def _compose(*args: str) -> subprocess.CompletedProcess:
-    project = PROJECT
-    base = project / "skydetect-ai/docker/docker-compose.yml"
-    override = project / "skydetect-ai/docker/docker-compose.pi.yml"
-    return subprocess.run(["docker", "compose", "--project-name", "skydetect-pi-local",
-                          "-f", str(base), "-f", str(override), *args],
-                         cwd=project, check=True, text=True)
+    command, env = _compose_parameters()
+    return subprocess.run([*command, *args], cwd=DOCKER_DIR, env=env, check=True, text=True)
+
+
+def _prepare_runtime_directories() -> None:
+    for folder in ("recordings", "status", "clips", "local-bridge", "pins"):
+        (ROOT / folder).mkdir(parents=True, exist_ok=True)
 
 
 def stack_status() -> dict:
-    project = PROJECT
-    result = subprocess.run(["docker", "compose", "--project-name", "skydetect-pi-local",
-                             "-f", str(project / "skydetect-ai/docker/docker-compose.yml"),
-                             "-f", str(project / "skydetect-ai/docker/docker-compose.pi.yml"),
-                             "ps", "--format", "json"], capture_output=True, text=True, timeout=10)
+    command, env = _compose_parameters()
+    result = subprocess.run([*command, "ps", "--format", "json"], cwd=DOCKER_DIR, env=env,
+                            capture_output=True, text=True, timeout=10)
     services = []
     if result.returncode == 0:
         for line in result.stdout.splitlines():
@@ -483,6 +528,8 @@ def main(argv: list[str]) -> int:
     elif argv == ["relay", "status"]:
         print(json.dumps(_read_state(), ensure_ascii=False, indent=2))
     elif argv == ["stack", "start"]:
+        _validate_camera_setting()
+        _prepare_runtime_directories()
         _compose("up", "-d", "--build", "frontend", "clip-bridge")
         print(json.dumps(relay_start(), ensure_ascii=False, indent=2))
     elif argv == ["stack", "stop"]:

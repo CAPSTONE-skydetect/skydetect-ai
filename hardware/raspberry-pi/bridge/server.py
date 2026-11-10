@@ -43,10 +43,12 @@ CLIP_PRE_SECONDS = 3.0
 CLIP_POST_SECONDS = 10.0
 SEGMENT_NAME = re.compile(r"^\d{4}-\d\d-\d\d_\d\d-\d\d-\d\d-\d{6}_[+-]\d{4}\.mp4$")
 CLIP_ID = re.compile(r"^clip_[0-9a-f]{32}$")
+SPRING_CLIP_ID = re.compile(r"^spring_clip_[0-9a-f]{32}$")
 ANALYSIS_ID = re.compile(r"^local_anl_[0-9a-f]{32}$")
-EXPECTED_ORIGINS = {"http://127.0.0.1:5178"}
+EXPECTED_ORIGINS = {os.environ.get("PI_FRONTEND_ORIGIN", "http://127.0.0.1:5178")}
 _DB_LOCK = threading.RLock()
 _SPACE_LOCK = threading.Lock()
+_SPRING_CLIP_SLOTS = threading.BoundedSemaphore(2)
 
 
 @contextmanager
@@ -469,24 +471,21 @@ def _extract_clip(parts: list[Path], stage: Path, output: Path, start_epoch: flo
             "segments": segment_meta, "video_sha256": _sha256(output), "video_bytes": output.stat().st_size}
 
 
-def _clip_worker(clip_id: str) -> None:
-    row = _db_clip(clip_id)
-    if not row:
-        return
-    start_epoch = row["requested_start_epoch"]
-    end_epoch = row["requested_end_epoch"]
+def _materialize_clip(clip_id: str, trigger_epoch: float) -> dict:
+    start_epoch = trigger_epoch - CLIP_PRE_SECONDS
+    end_epoch = trigger_epoch + CLIP_POST_SECONDS
     stage = STAGE_DIR / clip_id
     part_dir = stage / "parts"
     markers: set[Path] = set()
     copied: dict[str, Path] = {}
     deadline = end_epoch + 35
     try:
-        stage.mkdir(parents=True, exist_ok=True, mode=0o700)
+        stage.mkdir(parents=True, exist_ok=not SPRING_CLIP_ID.fullmatch(clip_id), mode=0o700)
         part_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         _atomic = stage / "job.json"
         _atomic.write_text(json.dumps({"clip_id": clip_id, "requested_start_epoch": start_epoch,
                                        "requested_end_epoch": end_epoch,
-                                       "trigger_server_epoch": row["trigger_server_epoch"]}, indent=2), encoding="utf-8")
+                                       "trigger_server_epoch": trigger_epoch}, indent=2), encoding="utf-8")
         while time.time() < deadline:
             for source in segments_in_window(start_epoch, end_epoch):
                 marker = _write_pin(source, clip_id)
@@ -524,22 +523,42 @@ def _clip_worker(clip_id: str) -> None:
         (stage / "source_frame_map.json").write_text(json.dumps(result["frame_map"], indent=2), encoding="utf-8")
         (stage / "timing_and_source.json").write_text(json.dumps({"timing": result["timing"],
             "segments": result["segments"], "video_sha256": result["video_sha256"]}, indent=2), encoding="utf-8")
-        with connect() as db:
-            db.execute("UPDATE clips SET status='READY', video_path=?, video_sha256=?, video_bytes=?, metadata_json=?, frame_map_json=?, timing_json=?, error=NULL WHERE clip_id=?",
-                       (str(output), result["video_sha256"], result["video_bytes"],
-                        json.dumps(result["metadata"]), json.dumps([r["clip_pts_s"] for r in result["frame_map"]]),
-                        json.dumps(result["timing"]), clip_id))
+        return result
     except Exception as exc:
-        with connect() as db:
-            db.execute("UPDATE clips SET status='FAILED', error=? WHERE clip_id=?", (_safe_error(exc), clip_id))
         (stage / "failure.json").write_text(json.dumps({"error": _safe_error(exc), "time": iso(time.time()),
                                                        "copied_segment_names": sorted(copied)}, indent=2), encoding="utf-8")
+        raise
     finally:
         for marker in markers:
             try:
                 marker.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def _clip_worker(clip_id: str) -> None:
+    row = _db_clip(clip_id)
+    if not row:
+        return
+    try:
+        result = _materialize_clip(clip_id, row["trigger_server_epoch"])
+        with connect() as db:
+            db.execute("UPDATE clips SET status='READY', video_path=?, video_sha256=?, video_bytes=?, metadata_json=?, frame_map_json=?, timing_json=?, error=NULL WHERE clip_id=?",
+                       (str(CLIPS_DIR / f"{clip_id}.mp4"), result["video_sha256"], result["video_bytes"],
+                        json.dumps(result["metadata"]), json.dumps([r["clip_pts_s"] for r in result["frame_map"]]),
+                        json.dumps(result["timing"]), clip_id))
+    except Exception as exc:
+        with connect() as db:
+            db.execute("UPDATE clips SET status='FAILED', error=? WHERE clip_id=?", (_safe_error(exc), clip_id))
+
+
+def _relay_is_live() -> bool:
+    try:
+        state = json.loads(RELAY_STATE.read_text(encoding="utf-8"))
+        age = time.time() - float(state["last_media_progress_at"])
+        return state.get("status") == "running" and -2 <= age <= 20
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def _multipart_upload(base_url: str, video_path: Path, filename: str) -> dict:
@@ -736,9 +755,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._error(404, "요청한 경로를 찾을 수 없습니다.")
 
     def do_POST(self) -> None:
+        path = urllib.parse.urlsplit(self.path).path
+        internal = re.fullmatch(r"/internal/clips/(spring_clip_[0-9a-f]{32})", path)
+        if internal:
+            # This route is not forwarded by nginx; only the Compose network can reach it.
+            self._materialize_spring_clip(internal.group(1))
+            return
         if not self._authorized(mutate=True):
             return
-        path = urllib.parse.urlsplit(self.path).path
         try:
             body = self._body()
         except (ValueError, json.JSONDecodeError) as exc:
@@ -753,6 +777,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         self._error(404, "요청한 경로를 찾을 수 없습니다.")
 
+    def _materialize_spring_clip(self, clip_id: str) -> None:
+        try:
+            trigger = float(self._body()["triggerEpoch"])
+            if not math.isfinite(trigger) or not -2 <= time.time() - trigger <= 30:
+                raise ValueError("invalid clip trigger time")
+        except (KeyError, TypeError, ValueError):
+            self._error(400, "invalid clip trigger time")
+            return
+        if not _relay_is_live():
+            self._error(503, "카메라 라이브 수신이 확인되지 않습니다.")
+            return
+        if not _SPRING_CLIP_SLOTS.acquire(blocking=False):
+            self._error(503, "클립 저장 작업이 진행 중입니다.")
+            return
+        try:
+            if (STAGE_DIR / clip_id).exists() or (CLIPS_DIR / f"{clip_id}.mp4").exists():
+                self._error(409, "clip ID already used")
+                return
+            result = _materialize_clip(clip_id, trigger)
+            self._send_json(200, {
+                "metadata": result["metadata"],
+                "framePts": [frame["clip_pts_s"] for frame in result["frame_map"]],
+                "timing": result["timing"],
+                "sha256": result["video_sha256"],
+                "bytes": result["video_bytes"],
+            })
+        except Exception as exc:
+            self._error(422, _safe_error(exc))
+        finally:
+            _SPRING_CLIP_SLOTS.release()
+
     def _create_clip(self, body: dict) -> None:
         try:
             client_click = body.get("clientClickEpochMs")
@@ -761,9 +816,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 raise ValueError("clientClickEpochMs must be finite")
             if display_time is not None and (not isinstance(display_time, (int, float)) or not math.isfinite(display_time) or display_time < 0):
                 raise ValueError("displayedMediaTimeS must be finite and nonnegative")
-            relay_state = json.loads(RELAY_STATE.read_text(encoding="utf-8"))
-            progress = relay_state.get("last_media_progress_at")
-            if relay_state.get("status") != "running" or not progress or time.time() - float(progress) > 20:
+            if not _relay_is_live():
                 self._error(503, "카메라 릴레이의 실제 영상 진행이 확인되지 않습니다. 상태를 확인해 주세요.")
                 return
             received = time.time()

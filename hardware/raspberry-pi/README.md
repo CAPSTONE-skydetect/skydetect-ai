@@ -1,8 +1,33 @@
 # Raspberry Pi local integration (experimental)
 
 This module belongs to `codex/pi-live-integration`. It does not change D0,
-RF or MiniRocket. The Python bridge is a LOCAL integration service using Spring
-session authentication; these endpoints are not implemented in Spring itself.
+RF or MiniRocket. Spring owns new clip jobs, authorization, and MySQL history.
+It calls the private Python worker to extract clips with FFmpeg. The frontend
+can still read existing SQLite clips from the bridge; their records are not
+migrated to MySQL. New clip analyses use the existing browser-to-AI flow, not
+Spring/MySQL analysis history.
+
+## Compatible revisions
+
+Use the sibling repository and model worktree layout in
+[`docker/README.md`](../../docker/README.md). These are the companion revisions
+for this Pi Compose configuration:
+
+| Repository or worktree | Branch | Commit |
+| --- | --- | --- |
+| `skydetect-backend` | `codex/pi-live-integration` | `f6c64943f353eb75d292405abd0740d028b257c9` |
+| `skydetect-frontend` | `codex/pi-live-integration` | `24927194590c6134a6e05e87dc5ce8caee7e9549` |
+| `skydetect-ai-rf` | `model/rf` | `16246fb028e836c451c95fc80fe68ef978d42505` |
+| `skydetect-ai-minirocket` | `model/minirocket` | `d31a8fe9606e6adc71e10f798aff837b4a708f36` |
+
+Before starting, create `skydetect-ai/docker/.env` from `.env.example` with
+local DB and operator credentials. Create `docker/.env.pi` in the AI repository
+from [`.env.pi.example`](../../docker/.env.pi.example), set `PI_CAMERA_SSH` and
+verify that SSH to the camera works with a trusted host key. Set
+`PI_RELAY_RUNTIME` to reuse an existing recordings/clip directory if needed.
+Relative runtime paths are resolved from `skydetect-ai/docker`.
+The controller supplies the invoking UID/GID unless overridden; direct Compose
+invocations must set both. The example binds the stack ports to loopback.
 
 ## Explicit operation
 
@@ -17,7 +42,7 @@ python3 skydetect-ai/hardware/raspberry-pi/control.py stack stop
 Relay-only controls use `relay start|status|stop`. No boot/login services are
 installed. The Mac must remain awake, with Docker and the Pi network available.
 The default installation layout is documented in `control.py`; `PI_RELAY_RUNTIME`
-can override the data folder. Native MediaMTX and Homebrew FFmpeg must already
+can override the data folder. Native MediaMTX and FFmpeg must already
 exist. Binary downloading/installing is not automated.
 
 Supervisor reconnects on camera child exit or missing media progress, with capped
@@ -32,10 +57,11 @@ check and are never auto-deleted. This is not a whole-disk/log/staging quota.
 
 ## API and timing
 
-Frontend proxy `/local-api/` exposes authenticated clip and analysis jobs.
-POST requires matching Origin and XSRF token plus a valid Spring login session.
-Jobs persist in SQLite, interrupted jobs become FAILED on bridge restart.
-No bridge port is published to the host.
+New clip creation, listing, status, and playback use Spring's `/api/clips`.
+Writes require an authenticated Spring session and CSRF token. Interrupted
+pending jobs are marked failed on Spring restart. The legacy proxy
+`/local-api/` still exposes the bridge's authenticated SQLite records. Legacy
+POST also checks Origin; the internal worker is not published on a host port.
 
 Clips target server receipt time minus 3 seconds / plus 10 seconds. Client click
 and displayed HLS media time are recorded separately; sensor capture time and
@@ -48,22 +74,27 @@ precision motion features on variable-rate camera recordings.
 
 ```sh
 python3 skydetect-ai/hardware/raspberry-pi/test_local.py
+python3 skydetect-ai/hardware/raspberry-pi/verify_spring_clips.py
+python3 skydetect-ai/hardware/raspberry-pi/verify_spring_clips.py --browser
 ```
 
-Twelve tests cover HLS session query handling, progress identity, remote source
-syntax, segment names, CSRF, interrupted-job persistence and an actual FFmpeg
-non-frame-aligned cut of synthetic 1080p video, invalid ROI and interval rejection.
-These unit tests are not real-Pi validation.
+The disposable Compose verifier requires the local stack images to be built
+and FFmpeg on PATH. It uses synthetic recordings and a separate MySQL volume,
+checks creation, failure when offline, range playback, and persistence after
+Spring restart, and writes evidence under ignored `reports/pi-integration/`.
+`--browser` also provides a temporary browser session to check clip playback
+and ROI analysis manually. Neither mode validates the physical Pi connection.
 
 SQLite uses DELETE journaling with explicitly closed per-request connections;
 do not inspect a running bind-mounted database from a second host SQLite process.
 Use authenticated APIs for live inspection. A stopped-service backup is preferred
 before maintenance. See `STORAGE_FIX_20261106.md` for the save-race regression.
 
-Actual camera clip/ROI/classification/restart/soak checks remain required before
-calling this complete. See installation-root `PI_FLOW_01_RESULTS.md`.
+Camera clip/ROI/classification/restart/soak checks on the new Spring path remain
+required. Keep real recordings, model weights, local credentials, databases
+and logs outside commits.
 
-### Observed integration checks (2026-11-06)
+### Legacy bridge-only integration checks (2026-11-06)
 
 One real Pi clip reached READY (390 mapped frames, about 13 seconds), byte-range
 seek returned 206. Real stored indoor footage was then analyzed once per model:

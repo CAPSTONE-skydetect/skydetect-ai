@@ -31,6 +31,24 @@ class LocalTests(unittest.TestCase):
         self.assertNotIn('"60000"', relay.REMOTE_CAMERA)
         compile(relay.REMOTE_CAMERA, '<remote>', 'exec')
 
+    def test_machine_specific_settings_and_safe_ssh_target(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder) / '.env.pi'
+            config.write_text('PI_RELAY_RUNTIME="/tmp/clip folder"\nDB_PASSWORD=ignored\n')
+            self.assertEqual(relay._pi_settings(config), {'PI_RELAY_RUNTIME': '/tmp/clip folder'})
+        with patch.object(relay, 'CAMERA_SSH', 'camera@raspberrypi.local'):
+            relay._validate_camera_setting()
+        with patch.object(relay, 'CAMERA_SSH', '-oProxyCommand=unexpected'):
+            with self.assertRaises(RuntimeError):
+                relay._validate_camera_setting()
+
+    def test_runtime_bind_directories_exist_before_compose(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.object(relay, 'ROOT', Path(folder) / 'runtime'):
+                relay._prepare_runtime_directories()
+                self.assertTrue(all((relay.ROOT / name).is_dir() for name in
+                                    ('recordings', 'status', 'clips', 'local-bridge', 'pins')))
+
     def test_reader_session_not_media_progress(self):
         def fingerprint(session):
             content = ('#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:3\n'
