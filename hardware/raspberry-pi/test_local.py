@@ -42,6 +42,16 @@ class LocalTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 relay._validate_camera_setting()
 
+    def test_wired_ipv6_target_and_known_host_alias(self):
+        with patch.multiple(relay, CAMERA_SSH='camera@fe80::1234%en7',
+                            CAMERA_HOST_KEY_ALIAS='172.20.10.2'):
+            relay._validate_camera_setting()
+        for target, alias in [('camera@fe80::1234%en7 -oProxyCommand=x', ''),
+                              ('camera@fe80::1234%en7', 'invalid alias')]:
+            with patch.multiple(relay, CAMERA_SSH=target, CAMERA_HOST_KEY_ALIAS=alias):
+                with self.assertRaises(RuntimeError):
+                    relay._validate_camera_setting()
+
     def test_runtime_bind_directories_exist_before_compose(self):
         with tempfile.TemporaryDirectory() as folder:
             with patch.object(relay, 'ROOT', Path(folder) / 'runtime'):

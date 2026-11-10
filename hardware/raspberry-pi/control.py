@@ -49,6 +49,7 @@ def _setting(name: str, default: str) -> str:
 
 ROOT = (DOCKER_DIR / Path(_setting("PI_RELAY_RUNTIME", "../../.skydetect-pi")).expanduser()).resolve()
 CAMERA_SSH = _setting("PI_CAMERA_SSH", "")
+CAMERA_HOST_KEY_ALIAS = _setting("PI_CAMERA_HOST_KEY_ALIAS", "")
 FFMPEG = _setting("PI_FFMPEG", "ffmpeg")
 STATE = ROOT / "status/state.json"
 LOCK = ROOT / ".supervisor.lock"
@@ -268,6 +269,7 @@ def _launch_capture(state: dict) -> tuple[subprocess.Popen, subprocess.Popen, th
     source = subprocess.Popen(
         ["ssh", "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
          "-o", "ConnectTimeout=8", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2",
+         *(["-o", f"HostKeyAlias={CAMERA_HOST_KEY_ALIAS}"] if CAMERA_HOST_KEY_ALIAS else []),
          CAMERA_SSH, remote_command],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=camera_log,
         start_new_session=True,
@@ -476,8 +478,19 @@ def relay_stop() -> dict:
 
 
 def _validate_camera_setting() -> None:
-    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*@[A-Za-z0-9][A-Za-z0-9_.-]*", CAMERA_SSH):
-        raise RuntimeError("Set PI_CAMERA_SSH to user@hostname or user@IPv4 in docker/.env.pi.")
+    user, separator, host = CAMERA_SSH.partition("@")
+    valid_host = bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", host))
+    if ":" in host:
+        address, scope_separator, scope = host.partition("%")
+        try:
+            socket.inet_pton(socket.AF_INET6, address)
+            valid_host = not scope_separator or bool(re.fullmatch(r"[A-Za-z0-9_.-]+", scope))
+        except OSError:
+            valid_host = False
+    if not separator or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", user) or not valid_host:
+        raise RuntimeError("Set PI_CAMERA_SSH to user@hostname, user@IPv4, or user@IPv6%interface.")
+    if CAMERA_HOST_KEY_ALIAS and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", CAMERA_HOST_KEY_ALIAS):
+        raise RuntimeError("PI_CAMERA_HOST_KEY_ALIAS must name an existing known_hosts entry.")
 
 
 def _compose_parameters() -> tuple[list[str], dict[str, str]]:
