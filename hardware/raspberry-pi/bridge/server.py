@@ -293,7 +293,7 @@ def _ffprobe_frames(path: Path) -> tuple[dict, list[dict]]:
     return {**stream, "format": raw.get("format", {})}, frames
 
 
-def inspect_segments(parts: list[Path]) -> tuple[list[dict], list[dict]]:
+def inspect_segments(parts: list[Path], *, allow_forward_gaps: bool = False) -> tuple[list[dict], list[dict]]:
     entries, source_frames = [], []
     previous_end = None
     prior_frame_epoch = None
@@ -313,7 +313,7 @@ def inspect_segments(parts: list[Path]) -> tuple[list[dict], list[dict]]:
             if delta <= 0:
                 raise RuntimeError(f"nonmonotonic_segment_pts:{part.name}")
             dt_values.append(delta)
-            if delta > 0.12:
+            if delta > 0.12 and not allow_forward_gaps:
                 raise RuntimeError(f"intra_segment_pts_gap_{delta:.3f}s:{part.name}")
         first_pts = float(media.get("start_time") or timestamps[0])
         duration = float((media.get("format") or {}).get("duration") or media.get("duration") or 0)
@@ -321,7 +321,7 @@ def inspect_segments(parts: list[Path]) -> tuple[list[dict], list[dict]]:
             duration = max(timestamps) + (frames[-1]["duration"] or 1 / 30) - first_pts
         if previous_end is not None:
             gap = start_epoch - previous_end
-            if gap > 0.12:
+            if gap > 0.12 and not allow_forward_gaps:
                 raise RuntimeError(f"inter_segment_time_gap_{gap:.3f}s:{part.name}")
             if gap < -0.12:
                 raise RuntimeError(f"overlapping_segment_timeline_{gap:.3f}s:{part.name}")
@@ -340,7 +340,7 @@ def inspect_segments(parts: list[Path]) -> tuple[list[dict], list[dict]]:
     median_dt = sorted(dt_values)[len(dt_values) // 2] if dt_values else 1 / 30
     for left, right in zip(source_frames, source_frames[1:]):
         delta = right["server_media_epoch"] - left["server_media_epoch"]
-        if delta > max(0.12, median_dt * 2.5):
+        if delta > max(0.12, median_dt * 2.5) and not allow_forward_gaps:
             raise RuntimeError(f"source_frame_gap_{delta:.3f}s")
     return entries, source_frames
 
@@ -403,15 +403,33 @@ def _concat_file(parts: list[Path], work_dir: Path) -> Path:
     return target
 
 
-def _extract_clip(parts: list[Path], stage: Path, output: Path, start_epoch: float, end_epoch: float) -> dict:
+def _select_contiguous_frames(frames: list[dict], trigger_epoch: float | None) -> tuple[list[dict], float | None]:
+    cuts = [(index, right["server_media_epoch"] - left["server_media_epoch"])
+            for index, (left, right) in enumerate(zip(frames, frames[1:]), start=1)
+            if right["server_media_epoch"] - left["server_media_epoch"] > 0.12]
+    if not cuts:
+        return frames, None
+    largest_gap = max(gap for _, gap in cuts)
+    boundaries = [0, *(index for index, _ in cuts), len(frames)]
+    for start, end in zip(boundaries, boundaries[1:]):
+        first = frames[start]["server_media_epoch"]
+        last = frames[end - 1]["server_media_epoch"]
+        if trigger_epoch is not None and first <= trigger_epoch <= last and last - first >= 3:
+            return frames[start:end], largest_gap
+    raise RuntimeError("recording_gap_no_contiguous_trigger_window")
+
+
+def _extract_clip(parts: list[Path], stage: Path, output: Path, start_epoch: float, end_epoch: float,
+                  *, trigger_epoch: float | None = None) -> dict:
     parts = parts_overlapping_window(parts, start_epoch, end_epoch)
-    segment_meta, all_frames = inspect_segments(parts)
+    segment_meta, all_frames = inspect_segments(parts, allow_forward_gaps=True)
     selected = [frame for frame in all_frames
                 if start_epoch <= frame["server_media_epoch"] < end_epoch]
     if len(selected) < 2 or selected[0]["server_media_epoch"] > start_epoch + 0.06:
         raise RuntimeError("requested_pre_roll_not_covered_by_source_frames")
     if selected[-1]["server_media_epoch"] < end_epoch - 0.08:
         raise RuntimeError("requested_post_roll_not_covered_by_source_frames")
+    selected, largest_gap = _select_contiguous_frames(selected, trigger_epoch)
     selected_start = selected[0]["server_media_epoch"]
     selected_end = selected[-1]["server_media_epoch"]
     first_index = all_frames.index(selected[0])
@@ -424,8 +442,11 @@ def _extract_clip(parts: list[Path], stage: Path, output: Path, start_epoch: flo
                "-i", str(concat),
                "-vf", f"select=between(n\\,{first_index}\\,{last_index}),setpts=PTS-STARTPTS",
                "-map", "0:v:0", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-               "-fps_mode", "passthrough", "-video_track_timescale", "90000", "-movflags", "+faststart",
-               str(temporary)]
+               "-fps_mode", "passthrough", "-video_track_timescale", "90000", "-movflags", "+faststart"]
+    if largest_gap is not None:
+        # Do not carry the removed gap into the final sample's display duration.
+        command += ["-bf", "0", "-bsf:v", "setts=duration=1/(30*TB)"]
+    command.append(str(temporary))
     completed = subprocess.run(command, capture_output=True, text=True, timeout=120)
     if completed.returncode:
         temporary.unlink(missing_ok=True)
@@ -441,6 +462,9 @@ def _extract_clip(parts: list[Path], stage: Path, output: Path, start_epoch: flo
             raise RuntimeError("output_pts_nonmonotonic")
         if any((right - left) > 0.12 for left, right in zip(out_frames, out_frames[1:])):
             raise RuntimeError("output_pts_gap_over_120ms")
+        duration = float((output_probe.get("format") or {}).get("duration") or 0)
+        if largest_gap is not None and duration - out_frames[-1] > 0.12:
+            raise RuntimeError("partial_clip_final_frame_duration_over_120ms")
         if int(stream.get("width") or 0) != 1920 or int(stream.get("height") or 0) != 1080:
             raise RuntimeError("output_resolution_changed")
         temporary.replace(output)
@@ -454,7 +478,6 @@ def _extract_clip(parts: list[Path], stage: Path, output: Path, start_epoch: flo
                          "source_server_media_iso": iso(frame["server_media_epoch"]),
                          "source_segment": frame["segment"],
                          "source_segment_frame_index": frame["segment_frame_index"]})
-    duration = float((output_probe.get("format") or {}).get("duration") or 0)
     fps = _rate(stream.get("avg_frame_rate")) or 30.0
     metadata = {"width": 1920, "height": 1080, "fps": fps, "frameCount": len(map_rows),
                 "durationMs": round(duration * 1000), "timeBase": stream.get("time_base"),
@@ -463,9 +486,11 @@ def _extract_clip(parts: list[Path], stage: Path, output: Path, start_epoch: flo
               "actualFirstSourceFrameEpoch": selected_start, "actualLastSourceFrameEpoch": selected_end,
               "requestedSpanSeconds": end_epoch - start_epoch,
               "actualSampledSpanSeconds": selected_end - selected_start,
+              "shortenedByGap": largest_gap is not None,
+              "largestExcludedGapSeconds": largest_gap,
               "sourceClock": "MediaMTX segment wall-time + per-segment PTS; not verified sensor capture wall-clock",
               "browserDisplayedMediaTimeIsCaptureTime": False,
-              "serverReceivedEpoch": start_epoch + CLIP_PRE_SECONDS,
+              "serverReceivedEpoch": trigger_epoch if trigger_epoch is not None else start_epoch + CLIP_PRE_SECONDS,
               "frameCount": len(map_rows)}
     return {"metadata": metadata, "frame_map": map_rows, "timing": timing,
             "segments": segment_meta, "video_sha256": _sha256(output), "video_bytes": output.stat().st_size}
@@ -499,9 +524,6 @@ def _materialize_clip(clip_id: str, trigger_epoch: float) -> dict:
             candidates = sorted(copied.values(), key=lambda p: parse_segment_time(p) or 0)
             if candidates:
                 if requested_window_covered(candidates, start_epoch, end_epoch):
-                    # Now that the requested tail exists, strict continuity and
-                    # per-frame PTS checks can fail the job without racing capture.
-                    inspect_segments(parts_overlapping_window(candidates, start_epoch, end_epoch))
                     break
             time.sleep(0.5)
         else:
@@ -519,7 +541,7 @@ def _materialize_clip(clip_id: str, trigger_epoch: float) -> dict:
             used = sum(p.stat().st_size for p in CLIPS_DIR.glob("*.mp4") if p.is_file())
             if used + CLIP_RESERVATION_BYTES > CLIP_MAX_BYTES:
                 raise RuntimeError("completed_clip_storage_cap_reached; existing clips were preserved")
-            result = _extract_clip(candidates, stage, output, start_epoch, end_epoch)
+            result = _extract_clip(candidates, stage, output, start_epoch, end_epoch, trigger_epoch=trigger_epoch)
         (stage / "source_frame_map.json").write_text(json.dumps(result["frame_map"], indent=2), encoding="utf-8")
         (stage / "timing_and_source.json").write_text(json.dumps({"timing": result["timing"],
             "segments": result["segments"], "video_sha256": result["video_sha256"]}, indent=2), encoding="utf-8")

@@ -97,6 +97,21 @@ class LocalTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'intra_segment_pts_gap'):
                 bridge.inspect_segments([part])
 
+    def test_partial_clip_keeps_trigger_and_never_joins_gap(self):
+        before = [{"server_media_epoch": i / 30} for i in range(181)]
+        after = [{"server_media_epoch": 6.6 + i / 30} for i in range(181)]
+        selected, gap = bridge._select_contiguous_frames(before + after, 3)
+        self.assertEqual(selected, before)
+        self.assertAlmostEqual(gap, 0.6)
+        with self.assertRaisesRegex(RuntimeError, "no_contiguous_trigger_window"):
+            bridge._select_contiguous_frames(before + after, 6.3)
+
+    def test_partial_clip_rejects_short_trigger_span(self):
+        before = [{"server_media_epoch": i / 30} for i in range(61)]
+        after = [{"server_media_epoch": 2.6 + i / 30} for i in range(181)]
+        with self.assertRaisesRegex(RuntimeError, "no_contiguous_trigger_window"):
+            bridge._select_contiguous_frames(before + after, 1)
+
     def test_invalid_roi_never_starts_analysis(self):
         row = {'status':'READY', 'metadata_json':'{"frameCount":390,"width":1920,"height":1080,"durationMs":12967}',
                'frame_map_json':'[0.033]'}
