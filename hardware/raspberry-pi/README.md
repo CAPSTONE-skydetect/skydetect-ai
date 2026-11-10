@@ -10,15 +10,31 @@ Spring/MySQL analysis history.
 ## Compatible revisions
 
 Use the sibling repository and model worktree layout in
-[`docker/README.md`](../../docker/README.md). These are the companion revisions
-for this Pi Compose configuration:
+[`docker/README.md`](../../docker/README.md). These revisions reproduce the
+Pi integration candidate, not a hardware-validated final release:
 
 | Repository or worktree | Branch | Commit |
 | --- | --- | --- |
+| `skydetect-ai` | `codex/pi-live-integration` | `dee654daaa24858dc499a1bf687741d16ae75597` (runtime baseline) |
 | `skydetect-backend` | `codex/pi-live-integration` | `f6c64943f353eb75d292405abd0740d028b257c9` |
 | `skydetect-frontend` | `codex/pi-live-integration` | `24927194590c6134a6e05e87dc5ce8caee7e9549` |
 | `skydetect-ai-rf` | `model/rf` | `16246fb028e836c451c95fc80fe68ef978d42505` |
 | `skydetect-ai-minirocket` | `model/minirocket` | `d31a8fe9606e6adc71e10f798aff837b4a708f36` |
+
+For a fresh checkout, run these commands from an empty parent directory with
+access to the three GitHub repositories. A documentation-only commit on the AI
+branch can be used in place of the runtime baseline if the runtime files match.
+
+```sh
+git clone --branch codex/pi-live-integration https://github.com/CAPSTONE-skydetect/skydetect-ai.git
+git clone --branch codex/pi-live-integration https://github.com/CAPSTONE-skydetect/skydetect-backend.git
+git clone --branch codex/pi-live-integration https://github.com/CAPSTONE-skydetect/skydetect-frontend.git
+git -C skydetect-ai switch --detach dee654daaa24858dc499a1bf687741d16ae75597
+git -C skydetect-backend switch --detach f6c64943f353eb75d292405abd0740d028b257c9
+git -C skydetect-frontend switch --detach 24927194590c6134a6e05e87dc5ce8caee7e9549
+git -C skydetect-ai worktree add --detach ../skydetect-ai-rf 16246fb028e836c451c95fc80fe68ef978d42505
+git -C skydetect-ai worktree add --detach ../skydetect-ai-minirocket d31a8fe9606e6adc71e10f798aff837b4a708f36
+```
 
 Before starting, create `skydetect-ai/docker/.env` from `.env.example` with
 local DB and operator credentials. Create `docker/.env.pi` in the AI repository
@@ -42,8 +58,10 @@ python3 skydetect-ai/hardware/raspberry-pi/control.py stack stop
 Relay-only controls use `relay start|status|stop`. No boot/login services are
 installed. The Mac must remain awake, with Docker and the Pi network available.
 The default installation layout is documented in `control.py`; `PI_RELAY_RUNTIME`
-can override the data folder. Native MediaMTX and FFmpeg must already
-exist. Binary downloading/installing is not automated.
+can override the data folder. Native MediaMTX and FFmpeg must already exist on
+the host, and `rpicam-vid` must work on the Pi. Binary installation is not
+automated. With the example config, open `http://127.0.0.1:5178/` and log in
+using the operator account configured in `docker/.env`.
 
 Supervisor reconnects on camera child exit or missing media progress, with capped
 backoff. Remote heartbeat expires after 15 seconds; a separate six-hour capture
@@ -93,6 +111,18 @@ before maintenance. See `STORAGE_FIX_20261106.md` for the save-race regression.
 Camera clip/ROI/classification/restart/soak checks on the new Spring path remain
 required. Keep real recordings, model weights, local credentials, databases
 and logs outside commits.
+
+### Final submission check
+
+1. Confirm the live feed from the physical Pi and capture a clip in the UI.
+   Check that the Spring job reaches `READY`, the clip plays and seeks, and its
+   history survives a backend restart.
+2. In the clip, select an airborne object's ROI and analyze a segment with each
+   model. Confirm the trajectory and overlay downloads and the displayed
+   prediction or abstention. This checks integration, not classification accuracy.
+3. Record the date, hardware, test outcomes, and exact Git SHAs for the AI,
+   backend, frontend, RF, and MiniRocket checkouts that passed. Share the AI
+   README at the submission revision that documents those verified versions.
 
 ### Legacy bridge-only integration checks (2026-11-06)
 
