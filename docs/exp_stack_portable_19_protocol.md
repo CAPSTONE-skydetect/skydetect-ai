@@ -28,3 +28,8 @@ rerun if needed. Frozen checkpoint parity on only two preselected records
 predictions), abs/rel tolerance 1e-8. Local clean subprocess with no
 cross-worktree source imports. No actual dataset fitting, serving changes,
 push, merge or PR. Four-hour limit; return evidence to Astra for review.
+
+Continuation steering: only Astra may publish after reviewing the scoped
+diff and test evidence. The publication target is origin model/minirocket
+by fast-forward only, conditional on the remote base still matching.
+This implementation session does not push, merge, rebase or change remotes.
