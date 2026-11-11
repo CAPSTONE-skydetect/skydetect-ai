@@ -1,4 +1,5 @@
 import csv
+import hashlib
 from pathlib import Path
 
 import cv2
@@ -223,8 +224,30 @@ def test_overlay_does_not_draw_bbox_for_lost_observation(
 
 
 def test_tracks_white_target_across_white_road(tmp_path: Path) -> None:
-    video_path = tmp_path / "white_target_white_road.mp4"
-    _make_white_road_transition_video(video_path)
+    # Lossy MP4 decoding differs across CPU architectures for this low-contrast
+    # scene. Freeze the previously tested pixels, not the runtime encoder output.
+    video_path = (
+        Path(__file__).parent / "fixtures/tracking/white_road_reference.avi"
+    )
+    capture = cv2.VideoCapture(str(video_path))
+    assert capture.isOpened()
+    pixel_hash = hashlib.sha256()
+    frame_count = 0
+    try:
+        assert capture.get(cv2.CAP_PROP_FPS) == 20.0
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            assert frame.shape == (180, 320, 3)
+            pixel_hash.update(frame.tobytes())
+            frame_count += 1
+    finally:
+        capture.release()
+    assert frame_count == 60
+    assert pixel_hash.hexdigest() == (
+        "a65c4660cb3e2389879727b2084e9436945c56fb89d87e6bda8631f1a178561a"
+    )
 
     result = process_manual_roi_video(
         str(video_path),
@@ -248,6 +271,7 @@ def test_tracks_white_target_across_white_road(tmp_path: Path) -> None:
     assert result.metadata["foreground_mask_segmented"] is True
     assert result.metrics["low_contrast_frames"] >= 4
     assert result.metrics["tracking_source_counts"]["motion"] >= 1
+    assert final_point.frame_index == frame_count - 1
     assert abs(final_point.cx * 320.0 - expected_x) < 12.0
     assert result.metrics["visible_ratio"] > 0.65
 

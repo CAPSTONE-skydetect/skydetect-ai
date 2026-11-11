@@ -122,3 +122,28 @@ docker run --rm --network none skydetect-unified-check-minirocket
 - MiniRocket: `9024731a649b5e0a84ead3fcc45c9dc0a692ce305cea6e5ec8b7d720867a1e5a`
 
 세부 코드/입력 해시는 `model_unification_sources.json`에 기록한다.
+
+## PR #49 CI 입력 재현성 보완 (2026-11-11)
+
+GitHub Actions run `43033185088`은 병합 충돌이 아니라 공통 A 합성 테스트
+`test_tracks_white_target_across_white_road`에서 실패했다. RF/MiniRocket 이미지
+빌드와 모델 출력 회귀 비교는 통과했고 clip-worker job도 통과했다.
+실패 당시 RF는 73 passed/1 failed, MiniRocket은 52 passed/1 failed/1 skipped였다.
+
+로컬 Linux amd64 컨테이너에서 기존 실패를 재현했다. 저대비 프레임 수만 다른
+것이 아니라 관측률 0.65, 마지막 관측 f42, 마지막 x=127.637로 실제 추적도
+실패했다. 동일 MP4 바이트를 ARM/amd64에서 읽어도 디코딩된 BGR 해시가 달랐다.
+ARM에서 이미 검증한 디코딩 픽셀을 FFV1로 고정하면 양쪽 모두 동일 픽셀 해시,
+관측률 0.90, 마지막 관측 f59, 마지막 x 약 214.821로 기존 검사를 통과했다.
+
+수정은 테스트 입력 고정에 한정한다. 기존 수치 기준을 낮추거나 skip하지 않고,
+60프레임 전체 픽셀 해시와 마지막 프레임 도달 검사도 추가한다. 원본 MP4 생성
+helper와 실패 기록은 보존한다. 추적기/모델/임계값/운영 디코더는 수정하지 않는다.
+이는 입력 재현성 수정이지 압축 영상에서의 A 강건성 개선이 아니다. 실제 저대비
+영상의 픽셀 차이에 따라 드리프트/누락이 생기는 문제는 여전히 별도 과제다.
+
+입력 출처와 상세 수치는 `tests/fixtures/tracking/README.md`에 기록한다.
+수정 후 전체 테스트: Linux arm64/amd64 각각 RF 74 passed,
+MiniRocket 53 passed/1 skipped. ARM 하드웨어 단위 검사도 25 passed였다.
+로컬 amd64 검증은 Mac의 Docker 에뮬레이션이며 Windows/Pi 종단 검증이 아니다.
+수정 푸시 후 GitHub 호스트에서 CI를 다시 확인해야 한다.
