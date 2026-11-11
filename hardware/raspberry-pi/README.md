@@ -1,5 +1,111 @@
 # Raspberry Pi local integration (experimental)
 
+## Wired preview check (2026-11-11)
+
+The Pi's DHCP-based Ethernet profile repeatedly failed activation on the direct
+Mac cable. The backed-up link-local configuration passed 25 network probes over
+four minutes. Network verification is not a long-duration reliability guarantee.
+`direct_link_setup.sh` requires the operator to enter sudo credentials on the Pi;
+it preserves a root-owned profile backup and uses an independent rollback timer.
+This maintenance helper is specific to the inspected Pi profile UUID, Mac peer,
+and interface names embedded in the scripts. It refuses a non-auto/auto baseline;
+do not rerun it as a routine start command or use it unchanged on another setup.
+
+Preview changes: reuse the supervisor's media-playlist session, rebuild the HLS
+player from the master URL after fatal network errors, and provide stable/fast
+preview modes plus a live-edge return button. Stable mode remains the HLS default.
+The UI delay is hls.js's estimated distance to the live edge, NOT sensor latency.
+
+Manual clock-in-camera screenshots compared the current on-screen clock with
+the same clock inside the Pi feed. Both clocks originate on the Mac, avoiding
+the Pi clock offset. Values below are short development observations, not a
+latency SLA; the clock updates every 50 ms and camera/display scanning add error.
+
+| Mode | Current clock / filmed clock | Approximate end-to-end delay |
+| --- | --- | --- |
+| Stable | 16:33:54.432 / 16:33:52.933 | 1.499 s |
+| Stable | 16:34:21.232 / 16:34:19.732 | 1.500 s |
+| Stable | 16:34:43.781 / 16:34:42.282 | 1.499 s |
+| Fast | 16:35:19.180 / 16:35:17.981 | 1.199 s |
+| Fast | 16:35:54.929 / 16:35:53.680 | 1.249 s |
+| Fast | 16:36:53.027 / 16:36:51.778 | 1.249 s |
+
+The fast-mode UI showed about 0.95 s estimated live-edge delay and zero buffer
+stalls during the observed interval. Automatic recovery after one intentional
+relay restart was observed without pressing reconnect. Reader count fell from
+dozens to two (browser plus supervisor) after idle sessions expired. This does
+not establish that session churn caused the entire prior delay.
+
+1080p30 capture, recording, and analysis settings were unchanged. A separate
+FFmpeg HLS check still reports duplicated MOOV and non-monotonic DTS warnings,
+including when using a fixed media-playlist session. These are NOT fixed by the
+session-cache change. MediaMTX also logged variable part-duration warnings;
+Safari/iOS compatibility and long-duration fast-mode stability remain unverified.
+
+### WebRTC preview (2026-11-11)
+
+The local Compose overlay now supplies optional `VITE_WHEP_URL`, selecting
+WebRTC preview by default only in that configured build. Without it the frontend
+keeps HLS. The UI offers an explicit HLS/WebRTC switch. MediaMTX exposes WHEP
+on `127.0.0.1:18889` and ICE UDP/TCP on `127.0.0.1:18189`; no external ICE
+servers or interface candidates are configured. This is a same-Mac setup, not
+a remotely reachable deployment configuration.
+
+The Pi H.264 stream still feeds the same stream-copy recording path. No preview
+transcoding, capture-resolution reduction, or recording-bitrate reduction was
+introduced. Completed recording samples before/after the change were H.264 High,
+1920x1080, approximately 30 fps, no B frames, and 7.989/7.996 Mbps respectively.
+
+Observed checks: WebRTC decoded 1920x1080 at 30 fps; the selected ICE connection
+used loopback UDP; switching to HLS removed the WebRTC server session, and
+switching back restored live playback. The sampled server session reported zero
+outbound discarded frames. Connection statistics alone do not establish
+end-to-end latency or long-duration reliability.
+
+After the user aimed the camera at the clock, three same-screenshot comparisons
+on 2026-11-11 measured approximately 0.30-0.35 seconds glass-to-glass:
+
+| Current clock | Filmed clock | Displayed-time difference |
+| --- | --- | --- |
+| 18:03:11.528 | 18:03:11.178 | 0.350 s |
+| 18:03:18.277 | 18:03:17.978 | 0.299 s |
+| 18:03:21.977 | 18:03:21.677 | 0.300 s |
+
+These manually read short samples support sub-second preview in this wired
+same-Mac setup, not a latency SLA. The clock refreshes every 50 ms; screenshot,
+display and camera scanning introduce uncertainty, so millisecond precision is
+not claimed. Earlier fast-HLS samples were approximately 1.20-1.25 seconds;
+the observations were sequential, not simultaneous controlled trials.
+
+Frontend HLS/WebRTC unit tests: 10 passed. Frontend container build passed.
+Preview media time is not a calibrated sensor wall-clock timestamp.
+
+### Interrupted stability check (2026-11-11)
+
+A 30-minute read-only check was stopped at the user's request to charge the
+laptop, after about 16.8 minutes and 201 polls (including deliberate outages and
+final shutdown). It is NOT a completed uninterrupted 30-minute soak.
+
+- A single owned camera SSH process was terminated. The supervisor relaunched
+  capture and the browser returned to WebRTC 1080p30 without a refresh or retry
+  click. Estimated recording gap: 4.16 seconds.
+- The user physically disconnected/reconnected the cable. Pi logs show link
+  return at 18:23:13; Mac recorder resumed at 18:23:26 and WebRTC connected at
+  18:23:28. The approximate 15-second recovery is not a precise cross-device
+  measurement. The recording gap including the disconnection was about 262.62s.
+- 68 finalized recording containers passed ffprobe. This is container readability,
+  not full-frame decoding or visual quality validation. Other than the two induced
+  outages, no >0.25s gaps were found using filename wall-clock versus duration;
+  frame-PTS continuity is not established by that check.
+- The user reported successful clip capture and analysis during WebRTC playback;
+  this is a workflow check, not evidence of bird/drone classification accuracy.
+
+Raw samples and the resume note remain local under
+`reports/pi-stability-20261111/` in the parent workspace, outside this repository.
+Next: a fresh uninterrupted 30-minute soak and a post-reconnection clip check.
+Relay/recording stopped normally; Pi power-off required the user's interactive
+sudo command and was not independently confirmed. No model settings changed.
+
 This module belongs to `codex/pi-live-integration`. It does not change D0,
 RF or MiniRocket. Spring owns new clip jobs, authorization, and MySQL history.
 It calls the private Python worker to extract clips with FFmpeg. The frontend

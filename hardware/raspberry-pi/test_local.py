@@ -19,6 +19,21 @@ relay = load('relay_test', HERE / 'control.py')
 bridge = load('bridge_test', HERE / 'bridge/server.py')
 
 class LocalTests(unittest.TestCase):
+    def setUp(self):
+        relay._HLS_MEDIA_URL = None
+
+    def test_health_poll_reuses_session_and_refreshes_after_expiry(self):
+        master = b'#EXTM3U\nvideo1_stream.m3u8?session=abc\n'
+        media = b'#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:3\n#EXT-X-PART:DURATION=0.2,URI="part9.mp4"\n'
+        with patch.object(relay.urllib.request, 'urlopen', side_effect=[
+                io.BytesIO(master), io.BytesIO(media), io.BytesIO(media),
+                OSError('expired'), io.BytesIO(master), io.BytesIO(media)]) as get:
+            first = relay._media_fingerprint()
+            self.assertEqual(relay._media_fingerprint(), first)
+            self.assertIn('session=abc', get.call_args_list[2].args[0])
+            self.assertEqual(relay._media_fingerprint(), first)
+            self.assertEqual(get.call_args_list[4].args[0], relay.HLS_URL)
+
     def test_playlist_query_string(self):
         responses = [b'#EXTM3U\nvideo1_stream.m3u8?session=abc\n',
                      b'#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:3\n#EXT-X-PART:DURATION=0.2,URI="part9.mp4"\n']

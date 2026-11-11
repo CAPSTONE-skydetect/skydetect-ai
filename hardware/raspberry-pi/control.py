@@ -59,8 +59,9 @@ RECORDINGS = ROOT / "recordings/pi"
 PIN_DIR = ROOT / "pins/segments"
 OWNED_MANIFEST = ROOT / "owned-rolling-files.json"
 LOG_DIR = ROOT / "logs"
-PORTS = (18554, 18888, 19997)
+PORTS = (18554, 18888, 19997, 18889, 18189)
 HLS_URL = "http://127.0.0.1:18888/pi/index.m3u8"
+_HLS_MEDIA_URL: str | None = None
 BACKOFF = (1, 2, 5, 10, 20)
 HEARTBEAT_SECONDS = 4
 PROGRESS_TIMEOUT = 18
@@ -152,9 +153,12 @@ def _ports_available() -> None:
                 sock.bind(("127.0.0.1", port))
             except OSError as exc:
                 raise RuntimeError(f"Required loopback port {port} is occupied; no process was stopped") from exc
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.bind(("127.0.0.1", 18189))
 
 
 def _fetch_playlist(url: str, depth: int = 0) -> tuple[str | None, str | None]:
+    global _HLS_MEDIA_URL
     if depth > 2:
         return None, None
     try:
@@ -166,6 +170,7 @@ def _fetch_playlist(url: str, depth: int = 0) -> tuple[str | None, str | None]:
     parts = [line for line in media_lines if line.startswith("#EXT-X-PART:")]
     sequences = [line for line in media_lines if line.startswith("#EXT-X-MEDIA-SEQUENCE:")]
     if parts or sequences:
+        _HLS_MEDIA_URL = url
         last_part = parts[-1] if parts else ""
         uri = ""
         if 'URI="' in last_part:
@@ -183,7 +188,12 @@ def _fetch_playlist(url: str, depth: int = 0) -> tuple[str | None, str | None]:
 
 
 def _media_fingerprint() -> str | None:
-    sequence, uri = _fetch_playlist(HLS_URL)
+    global _HLS_MEDIA_URL
+    cached = _HLS_MEDIA_URL
+    sequence, uri = _fetch_playlist(cached or HLS_URL)
+    if not uri and cached:
+        _HLS_MEDIA_URL = None
+        sequence, uri = _fetch_playlist(HLS_URL)
     if not uri:
         return None
     return f"{sequence or ''}|{uri}"
