@@ -2,7 +2,9 @@ venv/
 __pycache__/
 .pytest_cache/
 .env
+.env.pi
 .DS_Store
+*.swp
 *.pyc
 *.pyo
 *.pyd

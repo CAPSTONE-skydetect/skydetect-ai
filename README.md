@@ -3,6 +3,40 @@
 Track- and trajectory-based bird/drone analysis repository for the Sky Detect
 project.
 
+## 전체 시스템 실행 및 제출
+
+이 레포는 SkyDetect 전체 시스템의 **실행 안내 시작점**입니다. 코드는
+각 레포에서 관리하며, Docker Compose는 세 레포를 묶어서 실행합니다.
+이 통합 브랜치에서는 AI 모델별 워크트리가 더 이상 필요하지 않습니다.
+
+| 레포 | 담당 | 파이 통합 PR 대상 |
+| --- | --- | --- |
+| [skydetect-backend](https://github.com/CAPSTONE-skydetect/skydetect-backend) | Spring API, 클립 이력, MySQL | `dev` |
+| [skydetect-frontend](https://github.com/CAPSTONE-skydetect/skydetect-frontend) | 라이브 영상, 클립 재생, ROI 지정, 결과 화면 | `main` |
+| [skydetect-ai](https://github.com/CAPSTONE-skydetect/skydetect-ai) | AI 서버, Docker Compose, 파이 송출 및 클립 추출 워커 | `dev` |
+
+RF와 MiniRocket은 동일 AI 커밋의 Docker target `rf`, `minirocket`에서
+빌드되는 별도 서비스입니다. A 코드는 공유하고 모델·의존성·분류 계약은
+분리합니다. 프론트의 기존 모델 선택과 API 경로는 유지합니다.
+코드 위치와 학습 협업 방법은 [통합 기록](docs/model_unification.md)을 참고하세요.
+
+- **파이 없이 실행:** [기본 Docker Compose 가이드](docker/README.md).
+- **파이 통합 재현:** [호환 커밋, 로컬 설정, 실행 및 검증 가이드](hardware/raspberry-pi/README.md).
+  AI 통합 후보는 `codex/ai-model-unification`이며 기존 파이 연동 작업을 포함합니다.
+  프론트·백엔드는 기존 파이 연동 버전을 그대로 사용합니다.
+
+### PR 및 최종 제출 순서
+
+1. 레포별 작업 브랜치를 올리고 **백엔드 `dev` → 프론트 `main` →
+   AI `dev`** 순서로 PR을 검토합니다. AI의 Pi Compose가 새 Spring 클립
+   API를 사용하므로, 백엔드와 프론트 버전을 먼저 맞춥니다.
+2. 실제 파이에서 **촬영 → 클립 저장 및 재생 → ROI 지정 → 추적 및
+   분류**를 확인합니다. 새 Spring 경로의 저장·재생·재시작 복원은 합성
+   녹화로 확인했으며, 실제 파이로 전체 흐름을 검증하는 작업은 남아 있습니다.
+3. 통과한 AI·백엔드·프론트·RF·MiniRocket의 정확한 커밋과 검증 결과를
+   [파이 가이드](hardware/raspberry-pi/README.md)에 기록한 뒤, 최종 제출에는
+   그 문서를 포함하는 AI 레포 버전의 링크를 공유합니다.
+
 ## Current Scope
 
 The official FastAPI implementation lives under `ai_server/`.
@@ -14,7 +48,9 @@ contract:
 2. B: interpolation and feature extraction from track history
 3. C: classification, model training, and explanation helpers
 
-The shared contract lives in `ai_server/schemas.py`.
+The shared contract lives in `ai_server/contracts/common.py`. Model contracts
+live in `ai_server/classifiers/{rf,minirocket}/contracts.py`.
+`ai_server/schemas.py` retains compatibility imports for the selected runtime.
 
 ## Project Structure
 
@@ -22,7 +58,10 @@ The shared contract lives in `ai_server/schemas.py`.
 skydetect-ai/
 ├── ai_server/                            # FastAPI implementation root
 │   ├── main.py                           # A: server entrypoint / FastAPI app
-│   ├── schemas.py                        # Shared A/B/C contract source
+│   ├── schemas.py                        # Compatibility exports (default RF)
+│   ├── contracts/common.py               # Shared A/B contracts
+│   ├── classifiers/rf/                   # RF contracts, inference, train/evaluate
+│   ├── classifiers/minirocket/           # MiniRocket contracts, inference, train/evaluate
 │   ├── routers/
 │   │   ├── analyze.py                    # A: analysis endpoint
 │   │   └── classify.py                   # C: classify endpoint

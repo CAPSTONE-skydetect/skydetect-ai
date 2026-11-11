@@ -1,0 +1,49 @@
+services:
+  backend:
+    environment:
+      SKYDETECT_CLIPS_WORKER_URL: http://clip-bridge:8080
+      SKYDETECT_CLIPS_DIRECTORY: /pi-clips
+    volumes:
+      - "${PI_RELAY_RUNTIME:?Set PI_RELAY_RUNTIME in .env.pi}/clips:/pi-clips:ro"
+
+  clip-bridge:
+    build: ../hardware/raspberry-pi/bridge
+    environment:
+      PI_BRIDGE_DB: /runtime/local-bridge/jobs.sqlite3
+      PI_RECORDING_DIR: /runtime/recordings/pi
+      PI_CLIPS_DIR: /runtime/clips
+      PI_STAGE_DIR: /runtime/local-bridge/staging
+      PI_PIN_DIR: /runtime/pins/segments
+      PI_RELAY_STATE: /runtime/status/state.json
+      PI_BACKEND_URL: http://backend:8080
+      PI_RF_URL: http://ai-rf:8000
+      PI_MINIROCKET_URL: http://ai-minirocket:8000
+      PI_CLIP_MAX_BYTES: "4294967296"
+      PI_FRONTEND_ORIGIN: ${PI_FRONTEND_ORIGIN:-http://127.0.0.1:5178}
+      TZ: Asia/Seoul
+    volumes:
+      - "${PI_RELAY_RUNTIME}/recordings:/runtime/recordings:ro"
+      - "${PI_RELAY_RUNTIME}/status:/runtime/status:ro"
+      - "${PI_RELAY_RUNTIME}/clips:/runtime/clips"
+      - "${PI_RELAY_RUNTIME}/local-bridge:/runtime/local-bridge"
+      - "${PI_RELAY_RUNTIME}/pins:/runtime/pins"
+    user: "${PI_LOCAL_UID:?Set PI_LOCAL_UID}:${PI_LOCAL_GID:?Set PI_LOCAL_GID}"
+    depends_on:
+      - backend
+      - ai-rf
+      - ai-minirocket
+    expose:
+      - "8080"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      args:
+        VITE_CLIP_SOURCE: spring-pi
+        VITE_ANALYSIS_SOURCE: ai
+        VITE_HLS_URL: http://127.0.0.1:18888/pi/index.m3u8
+        VITE_WHEP_URL: http://127.0.0.1:18889/pi/whep
+    volumes:
+      - ../hardware/raspberry-pi/nginx.pi.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - clip-bridge

@@ -1,9 +1,14 @@
+from typing import Literal
+
 from pydantic import Field, model_validator
 
 from ai_server.schemas import StrictModel
 
 
 class TrackingTuning(StrictModel):
+    tracker_variant: Literal["d0", "central_v1", "central_handoff_v1"] = Field(
+        default="d0", description="A tracker profile; central variants are experimental."
+    )
     klt_accept_conf: float = Field(default=0.40, ge=0.10, le=0.95)
     recovery_conf: float = Field(default=0.58, ge=0.10, le=0.95)
     update_conf: float = Field(default=0.76, ge=0.10, le=0.99)

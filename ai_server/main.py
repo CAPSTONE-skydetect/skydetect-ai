@@ -1,8 +1,20 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+
+from ai_server.model_config import MODEL_NAME
 
 from ai_server.routers.analyze import router as analyze_router
 from ai_server.routers.classify import router as classify_router
 from ai_server.routers.ui import router as ui_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if MODEL_NAME == "minirocket":
+        from ai_server.classifiers.minirocket.prediction import get_classifier
+        get_classifier()
+    yield
 
 
 def create_app() -> FastAPI:
@@ -10,6 +22,7 @@ def create_app() -> FastAPI:
         title="SkyDetect-AI",
         version="0.1.0",
         description="Manual ROI tracking API for TrackSequence generation.",
+        lifespan=lifespan,
     )
     app.include_router(analyze_router)
     app.include_router(classify_router)

@@ -15,8 +15,8 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
-from ai_server.services.feature_core import build_feature_vector
-from ai_server.services.prediction import classify_feature_vector
+from ai_server.services.model_pipeline import classify_track
+from ai_server.model_config import MODEL_NAME
 from ai_server.services.tracker import AnalyzePipelineError, execute_manual_tracking
 from ai_server.services.tracking_video_io import (
     TrackingVideoError,
@@ -31,7 +31,6 @@ from ai_server.tracking_schemas import ManualTrackingRequest
 router = APIRouter(tags=["tracking-ui"])
 
 # 응답에 실어 보내는 판정 모델 이름. 프론트는 이 값으로 결과 표시 방식을 고른다.
-MODEL_NAME = "rf"
 
 UPLOAD_DIR = Path(os.environ.get("SKYDETECT_UPLOAD_DIR", "storage/uploads"))
 OUTPUT_DIR = Path(
@@ -89,8 +88,7 @@ def create_manual_track(payload: ManualTrackingRequest) -> dict[str, object]:
             detail=str(exc),
         ) from exc
 
-    extraction = build_feature_vector(result.track)
-    prediction = classify_feature_vector(extraction.feature_vector)
+    prediction, features = classify_track(result.track)
 
     return {
         "message": "manual ROI tracking complete",
@@ -100,18 +98,7 @@ def create_manual_track(payload: ManualTrackingRequest) -> dict[str, object]:
         "metadata": result.metadata,
         "metrics": result.metrics,
         "artifacts": result.artifacts,
-        "features": {
-            "status": extraction.feature_vector.feature_status,
-            "version": extraction.feature_version,
-            "config_id": extraction.feature_config_id,
-            "values": (
-                extraction.feature_vector.features.model_dump(mode="json")
-                if extraction.feature_vector.features
-                else None
-            ),
-            "reasons": extraction.reasons,
-            "quality": extraction.raw_quality,
-        },
+        "features": features,
         "prediction": prediction.model_dump(mode="json"),
         "download_urls": {
             "source_video": _download_url(safe_video_path),

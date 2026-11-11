@@ -1,0 +1,37 @@
+logLevel: info
+logDestinations: [stdout]
+api: true
+apiAddress: 127.0.0.1:19997
+metrics: false
+pprof: false
+playback: false
+rtsp: true
+rtspAddress: 127.0.0.1:18554
+rtspTransports: [tcp]
+rtmp: false
+hls: true
+hlsAddress: 127.0.0.1:18888
+hlsAlwaysRemux: true
+hlsVariant: lowLatency
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentCount: 7
+webrtc: true
+webrtcAddress: 127.0.0.1:18889
+webrtcAllowOrigins: ["http://127.0.0.1:5178", "http://localhost:5178"]
+webrtcLocalUDPAddress: 127.0.0.1:18189
+webrtcLocalTCPAddress: 127.0.0.1:18189
+webrtcIPsFromInterfaces: false
+webrtcAdditionalHosts: [127.0.0.1]
+webrtcICEServers2: []
+srt: false
+moq: false
+paths:
+  pi:
+    source: publisher
+    record: true
+    recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f_%z
+    recordFormat: fmp4
+    recordPartDuration: 1s
+    recordSegmentDuration: 10s
+    recordDeleteAfter: 5m

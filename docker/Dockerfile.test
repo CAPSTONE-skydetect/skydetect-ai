@@ -1,0 +1,6 @@
+ARG RUNTIME_IMAGE=skydetect-unified-test-rf
+FROM ${RUNTIME_IMAGE}
+RUN pip install pytest==9.0.2
+COPY tests ./tests
+COPY examples ./examples
+CMD ["python", "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"]
