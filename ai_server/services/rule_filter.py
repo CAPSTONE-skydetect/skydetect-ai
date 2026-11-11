@@ -1,6 +1,6 @@
 """Part C: Rule-based pre-filter for FeatureVectors."""
 
-from ai_server.schemas import FeatureVector, RuleFilterResult
+from ai_server.classifiers.rf.contracts import FeatureVector, RuleFilterResult
 
 _MIN_TRACK_LENGTH: int = 5
 _MIN_MEAN_CONF: float = 0.4

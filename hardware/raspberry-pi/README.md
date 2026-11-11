@@ -113,10 +113,19 @@ can still read existing SQLite clips from the bridge; their records are not
 migrated to MySQL. New clip analyses use the existing browser-to-AI flow, not
 Spring/MySQL analysis history.
 
-## Compatible revisions
+## Unified source checkout
 
-Use the sibling repository and model worktree layout in
-[`docker/README.md`](../../docker/README.md). These revisions reproduce the
+On `codex/ai-model-unification`, all hardware files from the published Pi branch
+are retained. Both AI images now build from this checkout with separate model
+targets. The Pi overlay no longer replaces A source files via bind mounts.
+The clip worker has its own Python+FFmpeg Dockerfile; it does not use the RF image.
+See [model unification](../../docs/model_unification.md) and
+[Compose setup](../../docker/README.md). Existing running stacks are not migrated
+automatically. Validate on a separate stack before replacing a working installation.
+
+## Historical compatible revisions (before unification)
+
+The following old revisions used sibling model worktrees. They reproduce the
 Pi integration candidate, not a hardware-validated final release:
 
 | Repository or worktree | Branch | Commit |
@@ -127,7 +136,7 @@ Pi integration candidate, not a hardware-validated final release:
 | `skydetect-ai-rf` | `model/rf` | `16246fb028e836c451c95fc80fe68ef978d42505` |
 | `skydetect-ai-minirocket` | `model/minirocket` | `d31a8fe9606e6adc71e10f798aff837b4a708f36` |
 
-For a fresh checkout, run these commands from an empty parent directory with
+For a historical checkout only, run these commands from an empty parent directory with
 access to the three GitHub repositories. A documentation-only commit on the AI
 branch can be used in place of the runtime baseline if the runtime files match.
 

@@ -78,16 +78,16 @@ def main():
                         'SKYDETECT_CLIPS_DIRECTORY':'/pi-clips'},
                     'volumes':[str(runtime/'clips')+':/pi-clips:ro'],
                     'depends_on':{'mysql':{'condition':'service_healthy'}}},
-                'clip-bridge': {'image':'skydetect-pi-local-ai-rf', 'command':['python','/bridge/server.py'],
-                    'volumes':[str(BRIDGE)+':/bridge:ro',str(runtime)+':/runtime'],
+                'clip-bridge': {'build':str(BRIDGE),
+                    'volumes':[str(runtime)+':/runtime'],
                     'user':f'{os.getuid()}:{os.getgid()}'},
             },
             'volumes':{'check-db':{}},
         }
         if browser_mode:
             for model in ('rf', 'minirocket'):
-                spec['services']['ai-'+model] = {'image':'skydetect-pi-local-ai-'+model,
-                    'environment':{'SKYDETECT_UPLOAD_DIR':'/app/storage/uploads',
+                spec['services']['ai-'+model] = {'build':{'context':str(AI_REPO), 'target':model},
+                    'environment':{'SKYDETECT_MODEL':model, 'SKYDETECT_UPLOAD_DIR':'/app/storage/uploads',
                                    'SKYDETECT_TRACK_OUTPUT_DIR':'/app/artifacts/manual_tracks'}}
             spec['services']['frontend'] = {'image':'skydetect-pi-local-frontend',
                 'ports':['127.0.0.1::80'], 'depends_on':['backend','clip-bridge','ai-rf','ai-minirocket'],
@@ -96,7 +96,7 @@ def main():
         config.write_text(json.dumps(spec))
         compose = ['docker','compose','-p',PROJECT,'--env-file',str(ENV),'-f',str(config)]
         try:
-            subprocess.run(compose+['up','-d','--no-build'], check=True, timeout=100)
+            subprocess.run(compose+['up','-d','--build'], check=True, timeout=600)
             base = 'http://' + subprocess.check_output(compose+['port','backend','8080'], text=True).strip()
             wait_for_backend(base)
             call, token = client_at(base)

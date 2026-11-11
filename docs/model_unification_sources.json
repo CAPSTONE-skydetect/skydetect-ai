@@ -1,0 +1,42 @@
+{
+  "refs": {
+    "hardware": "a94e791620a7be3a8f5ccc7cbb12df63a5f429c6",
+    "dev": "01e9fff22445b86ec328a97525f2ddc6411b4a46",
+    "rf": "16246fb028e836c451c95fc80fe68ef978d42505",
+    "minirocket": "75f1b541c1034345c1e1116822d62a1c0bacbf82"
+  },
+  "sha256": {
+    "ai_server/services/manual_roi_tracker.py": "372e1940cea674ddc112e60af4d43a8e6dc9244caacb0e66d6c91fea4213dd76",
+    "ai_server/tracking_schemas.py": "5bd198ad60faa3980d097172690c7616a918ec80924b24cf3409cf88ece30a0d",
+    "ai_server/services/feature_core.py": "b1e736e04f11ac8b061b0ae3e9792fef15ba4c39933a37cf9d7be9301fa31137",
+    "ai_server/services/feature_signal.py": "bcfcd8bf663e08805e2b32422f362eea4f4d12d4915a7eee4d1fbd7e42fc22e7",
+    "research/trajectory_sequence.py": "0fa02ce7629b8c8fc556c5581123b425582aae41eb9c7cc8fcd68bd4135a678a",
+    "research/minirocket_inference.py": "2b22ee89d673e5e2823b5b10a4e1028e1093ff8f919ae289960c58c610d2f51e",
+    "hardware/raspberry-pi/bridge/server.py": "3e09d570efb8940720f2811b7401e770d07bcde503995e8bf73cba8038289000",
+    "hardware/raspberry-pi/control.py": "b292a976f26f01ace8cd059eb1d65538b39856b025264ce4ef4fbe8ea87ec8c5",
+    "models/rf_classifier.pkl": "e0de459f27cbcf0fcb6265bf50f5e47f20102cedaafe7a5800b73314f83d1d3c",
+    "models/minirocket_classifier.joblib": "9024731a649b5e0a84ead3fcc45c9dc0a692ce305cea6e5ec8b7d720867a1e5a",
+    "ai_server/services/sequence_model.py": "d2f76b360048e8321970868ccc71bf5063ab528c0ec7ef47de831ba3d1e9c8ce",
+    "research/minirocket_stack_training.py": "c519f15db751a0bbb853c021b915aedde5d1949bc07b90175ed4c2f847128b79",
+    "research/minirocket_stack_data.py": "f5ae947e86ce9d16e4f2b1a4128416eb8717a16e48e056a1d1686f783e9455b7",
+    "tests/fixtures/model_parity/inputs.json": "7d9fd3762839e0e23ed56408834c8c56c5e37ffc34a6ce44421c8ee2bfd4b47a",
+    "tests/fixtures/model_parity/rf.json": "c5afa7fb82b9dc966fba2e4513c4e7d98fa672124e0692febbd999d385988271",
+    "tests/fixtures/model_parity/mini.json": "f38f0842105cc2fefe089e77f666152302542fb62d02c3b67c24e17149c56bb2"
+  },
+  "shared_source_equals_hardware_baseline": [
+    "ai_server/services/manual_roi_tracker.py",
+    "ai_server/tracking_schemas.py",
+    "ai_server/services/feature_core.py",
+    "ai_server/services/feature_signal.py",
+    "research/trajectory_sequence.py",
+    "research/minirocket_inference.py",
+    "hardware/raspberry-pi/bridge/server.py",
+    "hardware/raspberry-pi/control.py"
+  ],
+  "common_contract_classes_ast_identical": true,
+  "baseline_golden_source_image_verified": {
+    "rf": 9,
+    "minirocket": 10
+  },
+  "fixture_scope": "synthetic compatibility, not model accuracy"
+}

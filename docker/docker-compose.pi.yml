@@ -1,15 +1,4 @@
 services:
-  # Shared A profiles only. RF/MiniRocket checkpoints and B/C code stay in their images.
-  ai-rf:
-    volumes:
-      - ../ai_server/tracking_schemas.py:/app/ai_server/tracking_schemas.py:ro
-      - ../ai_server/services/manual_roi_tracker.py:/app/ai_server/services/manual_roi_tracker.py:ro
-
-  ai-minirocket:
-    volumes:
-      - ../ai_server/tracking_schemas.py:/app/ai_server/tracking_schemas.py:ro
-      - ../ai_server/services/manual_roi_tracker.py:/app/ai_server/services/manual_roi_tracker.py:ro
-
   backend:
     environment:
       SKYDETECT_CLIPS_WORKER_URL: http://clip-bridge:8080
@@ -18,8 +7,7 @@ services:
       - "${PI_RELAY_RUNTIME:?Set PI_RELAY_RUNTIME in .env.pi}/clips:/pi-clips:ro"
 
   clip-bridge:
-    image: skydetect-pi-local-ai-rf
-    command: ["python", "/bridge/server.py"]
+    build: ../hardware/raspberry-pi/bridge
     environment:
       PI_BRIDGE_DB: /runtime/local-bridge/jobs.sqlite3
       PI_RECORDING_DIR: /runtime/recordings/pi
@@ -34,7 +22,6 @@ services:
       PI_FRONTEND_ORIGIN: ${PI_FRONTEND_ORIGIN:-http://127.0.0.1:5178}
       TZ: Asia/Seoul
     volumes:
-      - ../hardware/raspberry-pi/bridge:/bridge:ro
       - "${PI_RELAY_RUNTIME}/recordings:/runtime/recordings:ro"
       - "${PI_RELAY_RUNTIME}/status:/runtime/status:ro"
       - "${PI_RELAY_RUNTIME}/clips:/runtime/clips"
