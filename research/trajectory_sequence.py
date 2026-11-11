@@ -61,7 +61,7 @@ def normalize_window(points, config):
     )
 
 
-def _read_observations(track):
+def _read_observations(track, clock_step_tolerance_seconds=0.002):
     if track.get("stabilization", {}).get("applied") is not True:
         raise ValueError("Expected explicitly stabilized A export")
     width, height = float(track["processed_width"]), float(track["processed_height"])
@@ -86,7 +86,7 @@ def _read_observations(track):
     centered_frames = clock_frames-clock_frames.mean()
     period = float(centered_frames@(clock_time-clock_time.mean())/(centered_frames@centered_frames))
     # Large inconsistent frame clocks need explicit handling, not silent time warping.
-    if np.max(np.abs(dt / df - period)) > max(0.002, 0.1 * period):
+    if np.max(np.abs(dt / df - period)) > max(clock_step_tolerance_seconds, 0.1 * period):
         raise ValueError("Inconsistent frame/timestamp clock")
     points = values[:, 2:].copy()
     points[:, 1] *= height / width
@@ -94,14 +94,14 @@ def _read_observations(track):
     return time, points, period, boundary
 
 
-def window_track(track, config=None):
+def window_track(track, config=None, *, clock_step_tolerance_seconds=0.002):
     """Return accepted windows and every rejection, without modifying the track.
 
     All starts are relative to the first observed time, not to a class or event.
     Two seconds of observation support are required for 60 half-open samples.
     """
     config = config or SequenceConfig()
-    time, points, period, boundary = _read_observations(track)
+    time, points, period, boundary = _read_observations(track, clock_step_tolerance_seconds)
     source_fps = 1.0 / period
     if source_fps < 15.0 - 0.01:
         raise ValueError("Source FPS below supported 15 Hz")
