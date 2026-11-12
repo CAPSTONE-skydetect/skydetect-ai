@@ -58,6 +58,10 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cases", type=int, nargs="+", default=list(range(5)))
     parser.add_argument("--no-test", action="store_true")
+    parser.add_argument("--keep-variants", type=int, nargs="+",
+                        help="train_augmented 에서 남길 변형 번호 (0=원본, 1~9=증강). 생략하면 전부")
+    parser.add_argument("--reselect-baseline-alpha", action="store_true",
+                        help="baseline 멤버 alpha 도 framescale 처럼 val 그룹 balanced accuracy 로 다시 고른다")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "pred").mkdir()
@@ -74,6 +78,11 @@ def main() -> None:
         t0 = time.time()
         case_dir = args.data / f"case_{k}"
         train = load(case_dir, "train_augmented")
+        if args.keep_variants is not None:
+            index = np.array([int(sid.rsplit(":", 2)[1]) for sid in train["sample_id"]])
+            keep = np.isin(index, args.keep_variants)
+            train = {key: value[keep] for key, value in train.items()}
+            log(f"case {k}: kept variants {sorted(args.keep_variants)} -> {keep.sum()} of {len(keep)} train windows")
         sets = {name: load(case_dir, name) for name in evals}
         for name, d in sets.items():
             if set(d["group_id"]) & set(train["group_id"]):
@@ -82,9 +91,10 @@ def main() -> None:
         fitted, alpha = {}, {"baseline": float(base_alpha[k])}
         val_dec = {}
         for name, key in members.items():
+            search = name == "framescale" or args.reselect_baseline_alpha
             rocket, scaler, ridges = exp.fit_model(train[key], train["y"], train["group_id"],
-                                                   ALPHAS if name == "framescale" else [alpha["baseline"]])
-            if name == "framescale":
+                                                   ALPHAS if search else [alpha["baseline"]])
+            if search:
                 scores = []
                 for a, r in ridges.items():
                     m = exp.summary(sets["validation_real"], decisions(rocket, scaler, r, sets["validation_real"][key]))
@@ -143,6 +153,7 @@ def main() -> None:
          f"{args.output.name} Stack (track, val, {len(args.cases)} cases pooled)",
          args.output / "confusion_S_val_track.png")
     meta = dict(data=str(args.data), baseline=str(args.baseline), alphas=list(ALPHAS), no_test=args.no_test,
+                keep_variants=args.keep_variants, reselect_baseline_alpha=args.reselect_baseline_alpha,
                 inner_folds=INNER_FOLDS, versions=seq.library_versions(), python=platform.python_version(),
                 runtime_s=round(time.time() - started, 1), summary=summary)
     (args.output / "results.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
