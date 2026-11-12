@@ -35,6 +35,7 @@ from ai_server.services import sequence_model as seq
 ROOT = Path(__file__).resolve().parents[1]
 DATASET = ROOT / "data" / "c_part" / "final_observation_v1" / "dataset"
 FOLDS = 5
+ALPHAS = tuple(seq.ALPHAS)
 
 
 def load(package: str) -> dict:
@@ -90,7 +91,7 @@ def decide(rocket, scaler, ridge, x):
 
 def cross_validate(real: dict, log) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
     """A / B 각각 5-fold CV. 반환: 시나리오별 OOF 결정값(alpha별), fold 지표표."""
-    oof = {s: {a: np.full(len(real["y"]), np.nan) for a in seq.ALPHAS} for s in ("A", "B")}
+    oof = {s: {a: np.full(len(real["y"]), np.nan) for a in ALPHAS} for s in ("A", "B")}
     rows = []
     for k in range(FOLDS):
         held = real["fold"] == k
@@ -103,7 +104,7 @@ def cross_validate(real: dict, log) -> tuple[dict, pd.DataFrame, pd.DataFrame]:
             if set(fit["group_id"]) & set(hold["group_id"]):
                 raise ValueError(f"fold {k} {scenario}: group leak")
             t0 = time.time()
-            rocket, scaler, ridges = fit_model(fit["X"], fit["y"], fit["group_id"], seq.ALPHAS)
+            rocket, scaler, ridges = fit_model(fit["X"], fit["y"], fit["group_id"], ALPHAS)
             z = seq.transform(rocket, scaler, hold["X"])
             for alpha, ridge in ridges.items():
                 d = ridge.decision_function(z)
@@ -138,7 +139,12 @@ def best_threshold(track_table: pd.DataFrame) -> float:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--alphas", type=float, nargs="+", default=list(seq.ALPHAS))
+    parser.add_argument("--no-test", action="store_true",
+                        help="test_real/test_augmented 를 읽지도 평가하지도 않는다 (설정 탐색용)")
     args = parser.parse_args()
+    global ALPHAS
+    ALPHAS = tuple(args.alphas)
     out = args.output
     out.mkdir(parents=True, exist_ok=False)
     started = time.time()
@@ -179,8 +185,8 @@ def main() -> None:
 
     log("[3/3] validation / test evaluation")
     evals = {}
-    sets = {"validation_real": load("validation_real"), "test_real": load("test_real"),
-            "validation_augmented": load("validation_augmented"), "test_augmented": load("test_augmented")}
+    names = ["validation_real", "validation_augmented"] + ([] if args.no_test else ["test_real", "test_augmented"])
+    sets = {name: load(name) for name in names}
     decisions = {}
     for s in ("A", "B"):
         for name, data in sets.items():
@@ -206,7 +212,7 @@ def main() -> None:
 
     result = dict(dataset=str(DATASET.relative_to(ROOT)).replace("\\", "/"),
                   dataset_manifest_sha256=seq.file_hash(DATASET / "manifest.json"),
-                  recipe=dict(n_kernels=seq.N_KERNELS, seed=seq.RANDOM_STATE, alphas=list(seq.ALPHAS),
+                  recipe=dict(n_kernels=seq.N_KERNELS, seed=seq.RANDOM_STATE, alphas=list(ALPHAS),
                               weights="balanced class/group", alpha_selection="5-fold CV mean group macro-F1, tie→smallest",
                               threshold_selection="validation_real track balanced accuracy, tie→closest to 0"),
                   chosen_alpha=chosen, thresholds=thresholds, cv=cv, evaluation=evals,
