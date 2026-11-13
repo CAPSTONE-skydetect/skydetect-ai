@@ -62,3 +62,45 @@ def package_box_windows(package_dir: Path, sources: pd.DataFrame, sample_ids, ji
     if not np.isfinite(out).all():
         raise ValueError(f"Non-finite box channels in {package_dir}")
     return out
+
+
+@lru_cache(maxsize=None)
+def _frame_width(path: str) -> float:
+    return float(json.loads(Path(path).read_text(encoding="utf-8"))["processed_width"])
+
+
+def box_size(rows: np.ndarray, start: float, dropped: set[int], jitter_px: float = 0.0,
+             rng: np.random.Generator | None = None) -> float:
+    """창 구간(2초, 30Hz 격자)의 상자 크기 sqrt(w*h) 중앙값 (px).
+
+    프레임 간 미세한 변화는 쓰지 않고 구간 대표값 하나만 쓴다 (E4·E5 에서 문제였던 것은 미세 변화였다).
+    """
+    keep = ~np.isin(rows[:, 0], list(dropped)) if dropped else np.ones(len(rows), bool)
+    time, w, h = rows[keep, 1], rows[keep, 2].copy(), rows[keep, 3].copy()
+    if jitter_px:
+        w = w + rng.normal(0, jitter_px, len(w))
+        h = h + rng.normal(0, jitter_px, len(h))
+    w, h = np.maximum(w, 1.0), np.maximum(h, 1.0)
+    grid = start + np.arange(CONFIG.samples) / CONFIG.fps
+    return float(np.median(np.sqrt(np.interp(grid, time, w) * np.interp(grid, time, h))))
+
+
+def package_box_sizes(package_dir: Path, sources: pd.DataFrame, sample_ids, jitter_px: float = 0.0,
+                      seed: int = 0) -> np.ndarray:
+    """package 의 창 순서(sample_ids)대로 상자 크기 중앙값을 화면 가로 길이 대비 비율로 돌려준다 (E18).
+
+    궤적 좌표(창의 normalization_scale)와 같은 단위라서, 이동 크기를 이 값으로 나누면 '물체 크기의 몇 배'가 된다.
+    """
+    meta = pd.read_csv(package_dir / "minirocket_windows.csv", encoding="utf-8-sig").set_index("window_id")
+    recipes = pd.read_csv(package_dir / "recipes.csv", encoding="utf-8-sig").set_index("sample_id")
+    dropped = {sid: set(json.loads(v)) for sid, v in recipes.dropped_frame_indices.items()}
+    rng = np.random.default_rng(seed)
+    out = np.empty(len(sample_ids), dtype=np.float64)
+    for i, wid in enumerate(sample_ids):
+        row = meta.loc[wid]
+        path = sources.loc[row.parent_track_id].source_path
+        out[i] = box_size(_track(path), float(row.window_start_s), dropped.get(row.sample_id, set()),
+                          jitter_px, rng) / _frame_width(path)
+    if not np.isfinite(out).all() or np.any(out <= 0):
+        raise ValueError(f"Invalid box sizes in {package_dir}")
+    return out

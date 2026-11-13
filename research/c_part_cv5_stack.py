@@ -17,6 +17,8 @@ alpha : 멤버마다 val 실촬영 그룹 balanced accuracy 로 고른다 (동�
   --n-kernels (E8), --member-classifier logistic (E10), --val-stride (E11, val 추론 때만 창 간격 변경),
   --eval-data (E12, 증강 세기만 바꾼 학습 데이터를 쓸 때 val 세트는 기존 데이터에서 읽음),
   --kinematics (E13, 속도 크기·진행 방향 변화 2채널 추가), --transform multirocket (E14).
+  --hflip (E16, 학습에 좌우 반전 사본 추가 + 평가 때 원본·반전 점수 평균), --train-pieces (E17, 학습 곡선),
+  --bodyscale (E18, 이동을 물체 크기의 배수로 나타낸 입력의 멤버 추가. 상자는 창 구간 크기 중앙값만 쓴다).
 임계값은 세 가지를 기록한다: t0 (0 고정, 대표값), tuned (val 로 고름, 낙관적), oof (train 내부 OOF 로 고름).
 test 는 읽지 않는다 (--no-test). 최종 후보가 정해진 뒤 --final-test 로 한 번만 평가한다.
 
@@ -40,7 +42,7 @@ from sklearn.preprocessing import StandardScaler
 from ai_server.services import sequence_model as seq
 from . import c_part_cv5_experiment as cv5
 from . import c_part_minirocket_experiment as exp
-from .box_channels import package_box_windows
+from .box_channels import package_box_sizes, package_box_windows
 from .minirocket_stack_training import scale_windows
 from .plot_confusion import plot
 
@@ -51,11 +53,13 @@ INNER_FOLDS = 3
 def load(case_dir: Path, package: str, sources: pd.DataFrame | None = None, box_jitter: float = 0.0,
          seed: int = 0) -> dict:
     data = cv5.load(case_dir, package)
-    if sources is not None:
+    if BOX:
         data["X_box"] = package_box_windows(case_dir / package, sources, data["sample_id"],
                                             jitter_px=box_jitter, seed=seed)
     meta = pd.read_csv(case_dir / package / "minirocket_windows.csv", encoding="utf-8-sig").set_index("window_id")
     data["scale"] = meta.loc[data["sample_id"]].normalization_scale.to_numpy()
+    if BODYSCALE:
+        data["size"] = package_box_sizes(case_dir / package, sources, data["sample_id"])
     return finish(data)
 
 
@@ -63,6 +67,22 @@ N_KERNELS = seq.N_KERNELS
 CLASSIFIER = "ridge"
 KINEMATICS = False
 TRANSFORM = "minirocket"
+HFLIP = False
+BOX = False
+BODYSCALE = False
+
+
+def hflip(x: np.ndarray) -> np.ndarray:
+    """창을 좌우로 뒤집는다 (E16). 가로 위치·가로 변화량(qx, dx)의 부호만 바꾸고 세로 채널은 그대로 둔다.
+
+    화면을 거울에 비춘 것과 같아서 새/드론 라벨은 바뀌지 않는다. 세로 반전은 중력 방향이 바뀌므로 쓰지 않는다.
+    속도·방향 채널(--kinematics)이 붙어 있으면 방향 변화량의 부호도 함께 바꾼다.
+    """
+    out = x.copy()
+    out[:, [0, 2]] *= -1
+    if x.shape[1] == 6:
+        out[:, 5] *= -1
+    return out
 
 
 def add_kinematics(x: np.ndarray) -> np.ndarray:
@@ -97,8 +117,21 @@ def transform(rocket, scaler, x: np.ndarray) -> np.ndarray:
     return scaler.transform(rocket.transform(check(x))).astype(np.float64)
 
 
+def body_windows(x: np.ndarray, scale: np.ndarray, size: np.ndarray) -> np.ndarray:
+    """이동을 '물체 크기의 몇 배'로 나타낸 창 (E18).
+
+    scale(창의 normalization_scale)과 size(창 구간 상자 크기 중앙값)는 둘 다 화면 가로 길이 대비 값이라
+    정규화한 위치 q 에 scale / size 를 곱하면 물체 크기 단위의 위치가 된다. 거리가 달라도 값이 같다
+    (멀어지면 화면 속 이동과 상자가 같은 비율로 작아진다). 상수 배율은 MiniRocket 특징에 영향이 없다.
+    """
+    out = scale_windows(np.ascontiguousarray(x[:, :seq.N_CHANNELS]), scale / size)
+    return add_kinematics(out) if KINEMATICS else out
+
+
 def finish(data: dict) -> dict:
     data["X_frame"] = scale_windows(data["X"], data["scale"])
+    if BODYSCALE:
+        data["X_body"] = body_windows(data["X"], data["scale"], data["size"])
     if KINEMATICS:
         data["X"], data["X_frame"] = add_kinematics(data["X"]), add_kinematics(data["X_frame"])
     return data
@@ -152,6 +185,12 @@ def decide(models, x):
     return np.mean([r.decision_function(transform(rk, sc, x)) for rk, sc, r in models], axis=0)
 
 
+def decide_eval(models, x):
+    """평가 세트용 점수. --hflip 이면 원본 창과 좌우 반전 창의 점수를 평균한다."""
+    score = decide(models, x)
+    return (score + decide(models, hflip(x))) / 2 if HFLIP else score
+
+
 def track_mean(data: dict, scores: dict) -> pd.DataFrame:
     table = pd.DataFrame(dict(track=seq.track_ids(data["sample_id"]), group=data["group_id"], label=data["y"], **scores))
     return table.groupby(["track", "group", "label"], as_index=False).mean()
@@ -185,25 +224,40 @@ def main() -> None:
                         help="특징 변환 (E14). multirocket 은 --n-kernels 1250 으로 특징 수를 MiniRocket 10,000 과 맞춘다")
     parser.add_argument("--kinematics", action="store_true",
                         help="두 멤버 입력에 속도 크기·진행 방향 변화량 2채널을 붙인다 (E13)")
+    parser.add_argument("--hflip", action="store_true",
+                        help="좌우 반전 대칭 (E16): 학습에 좌우 반전 사본을 더하고, 평가 때 원본·반전 점수를 평균한다")
+    parser.add_argument("--train-pieces", type=int, choices=[1, 2, 3],
+                        help="학습 곡선 점검 (E17): case 의 train 3조각 중 앞에서부터 이 개수만 학습에 쓴다")
+    parser.add_argument("--bodyscale", action="store_true",
+                        help="이동을 물체 크기의 배수로 나타낸 입력의 멤버를 추가한다 (E18). 상자는 창 구간 크기 중앙값만 쓴다")
+    parser.add_argument("--size-jitter", type=float, nargs="*", default=[1.0, 2.0],
+                        help="점검용: val 실촬영 상자에 흔들림(px)을 넣고 크기 중앙값을 다시 구한 세트. 선택에는 쓰지 않음")
     parser.add_argument("--box", action="store_true", help="물체 상자(w, h) 채널 멤버를 추가한다")
     parser.add_argument("--box-train-jitter", type=float, default=0.0,
                         help="학습 상자 크기에만 넣을 흔들림(px, 표준편차)")
     parser.add_argument("--box-jitter", type=float, nargs="*", default=[1.0, 2.0],
                         help="점검용: val 실촬영 상자 크기에 넣을 흔들림(px). 선택에는 쓰지 않음")
     args = parser.parse_args()
-    global N_KERNELS, CLASSIFIER, KINEMATICS, TRANSFORM
-    N_KERNELS, CLASSIFIER, KINEMATICS, TRANSFORM = (args.n_kernels, args.member_classifier, args.kinematics,
-                                                    args.transform)
+    global N_KERNELS, CLASSIFIER, KINEMATICS, TRANSFORM, HFLIP, BOX, BODYSCALE
+    N_KERNELS, CLASSIFIER, KINEMATICS, TRANSFORM, HFLIP = (args.n_kernels, args.member_classifier, args.kinematics,
+                                                           args.transform, args.hflip)
+    BOX, BODYSCALE = args.box, args.bodyscale
+    if args.bodyscale and args.val_stride:
+        raise SystemExit("--bodyscale 과 --val-stride 는 함께 쓰지 않는다")
     if args.no_test == args.final_test:
         raise SystemExit("--no-test(개선 단계) 와 --final-test(최종 1회) 중 하나만 붙일 것")
+    if args.hflip and args.box:
+        raise SystemExit("--hflip 과 --box 는 함께 쓰지 않는다")
+    pieces = pd.read_csv(args.data / "sources.csv", encoding="utf-8-sig").set_index("parent_track_id").piece
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "pred").mkdir()
     sources = (pd.read_csv(args.data / "sources.csv", encoding="utf-8-sig").set_index("parent_track_id")
-               if args.box else None)
+               if args.box or args.bodyscale else None)
     evals = ["validation_real", "validation_augmented"] + (["test_real", "test_augmented"] if args.final_test else [])
     base_rows = pd.read_csv(args.baseline / "case_results.csv", keep_default_na=False)
     base_alpha = base_rows[base_rows.scenario == "B"].drop_duplicates("case").set_index("case").alpha.to_dict()
-    members = {"baseline": "X", "framescale": "X_frame", **({"box": "X_box"} if args.box else {})}
+    members = {"baseline": "X", "framescale": "X_frame", **({"bodyscale": "X_body"} if args.bodyscale else {}),
+               **({"box": "X_box"} if args.box else {})}
     seed0 = args.seeds[0]
     started, log_lines, rows, alpha_rows = time.time(), [], [], []
 
@@ -225,11 +279,30 @@ def main() -> None:
             keep = np.isin(index, args.keep_variants)
             train = {key: value[keep] for key, value in train.items()}
             log(f"case {k}: kept variants {sorted(args.keep_variants)} -> {keep.sum()} of {len(keep)} train windows")
+        if args.train_pieces is not None:
+            use = [(k + 1 + i) % 5 for i in range(args.train_pieces)]
+            parent = pd.Series(train["sample_id"]).str.replace(r":\d+:w\d+$", "", regex=True)
+            keep = pieces.loc[parent].isin(use).to_numpy()
+            train = {key: value[keep] for key, value in train.items()}
+            log(f"case {k}: train pieces {use} -> {keep.sum()} of {len(keep)} train windows, "
+                f"{len(set(train['group_id']))} groups")
+        if args.hflip:  # 좌우 반전 사본. sample_id 를 그대로 두어 OOF track 점수가 원본·반전 평균이 되게 한다
+            n = len(train["y"])
+            train = {key: np.concatenate([value, hflip(value) if key in ("X", "X_frame", "X_body") else value])
+                     for key, value in train.items()}
+            log(f"case {k}: hflip copies added -> {len(train['y'])} train windows (from {n})")
         eval_dir = (args.eval_data or args.data) / f"case_{k}"
         sets = {name: load(eval_dir, name, sources) for name in evals}
         if args.val_stride:
             sets["validation_real"] = rewindow(sets["validation_real"], args.data, args.val_stride)
             log(f"case {k}: validation_real re-windowed at {args.val_stride}s -> {len(sets['validation_real']['y'])} windows")
+        if args.bodyscale:
+            for j in args.size_jitter:
+                jittered = dict(sets["validation_real"])
+                size = package_box_sizes(eval_dir / "validation_real", sources, jittered["sample_id"],
+                                         jitter_px=j, seed=k)
+                jittered["X_body"] = body_windows(jittered["X"], jittered["scale"], size)
+                sets[f"validation_real_sizejitter{j:g}"] = jittered
         if args.box:
             for j in args.box_jitter:
                 jittered = dict(sets["validation_real"])
@@ -247,8 +320,12 @@ def main() -> None:
             rocket, scaler, ridges = fit_member(train[key], train["y"], train["group_id"], alphas, seed0)
             full[name] = (rocket, scaler, ridges)
             z = transform(rocket, scaler, sets["validation_real"][key])
+            z_flip = transform(rocket, scaler, hflip(sets["validation_real"][key])) if HFLIP else None
             for a, r in ridges.items():
-                m = exp.summary(sets["validation_real"], r.decision_function(z))
+                score = r.decision_function(z)
+                if z_flip is not None:
+                    score = (score + r.decision_function(z_flip)) / 2
+                m = exp.summary(sets["validation_real"], score)
                 alpha_rows.append(dict(case=k, member=name, alpha=a,
                                        group_balanced_accuracy=m["group"]["balanced_accuracy"],
                                        track_balanced_accuracy=m["track"]["balanced_accuracy"]))
@@ -306,7 +383,7 @@ def main() -> None:
 
         dec = {}
         for name, d in sets.items():
-            cols = np.column_stack([decide(fitted[n], d[key]) for n, key in members.items()])
+            cols = np.column_stack([decide_eval(fitted[n], d[key]) for n, key in members.items()])
             dec[name] = head.decision_function(meta_scaler.transform(cols))
             pd.DataFrame(dict(sample_id=d["sample_id"], group_id=d["group_id"], label=d["y"], variant=d["variant"],
                               decision=dec[name], **{n: cols[:, i] for i, n in enumerate(members)})).to_csv(
@@ -339,6 +416,8 @@ def main() -> None:
     meta = dict(data=str(args.data), eval_data=str(args.eval_data or args.data), baseline=str(args.baseline), alphas=list(ALPHAS), no_test=args.no_test, final_test=args.final_test,
                 members=list(members), alpha_mode=args.alpha_mode, seeds=args.seeds, n_kernels=args.n_kernels,
                 member_classifier=args.member_classifier, val_stride=args.val_stride, kinematics=args.kinematics, transform=args.transform,
+                hflip=args.hflip, train_pieces=args.train_pieces,
+                bodyscale=args.bodyscale, size_jitter=args.size_jitter if args.bodyscale else None,
                 keep_variants=args.keep_variants, reselect_baseline_alpha=args.reselect_baseline_alpha,
                 box=args.box, box_train_jitter=args.box_train_jitter, box_jitter=args.box_jitter if args.box else None,
                 inner_folds=INNER_FOLDS, versions=seq.library_versions(), python=platform.python_version(),
