@@ -35,7 +35,7 @@ def assign_pieces(records, seed):
             raise ValueError(f"piece {piece} lacks a label")
 
 
-def build(root, label_map, audit, output, seed):
+def build(root, label_map, audit, output, seed, location_scale=1.0):
     if output.exists():
         raise FileExistsError(output)
     records, links = base.read_sources(root, label_map)
@@ -60,6 +60,8 @@ def build(root, label_map, audit, output, seed):
             members = {s: [dict(r, split=s, fold=r["piece"]) for r in records if roles[r["parent_track_id"]] == s]
                        for s in base.SPLITS}
             profile = base.observation_profile(members["train"], clips)
+            if location_scale != 1.0:  # 증강 세기 점검(E12): 측정한 위치 오차를 일정 배율로 키우거나 줄인다
+                profile = (profile[0] * location_scale, profile[1], dict(profile[2], location_scale=location_scale))
             packages = {}
             for split, selected in members.items():
                 for suffix, calibration in (("real", None), ("augmented", profile)):
@@ -71,7 +73,7 @@ def build(root, label_map, audit, output, seed):
                                       calibration=profile[2], packages=packages)
         pd.DataFrame([{k: v for k, v in row.items() if k not in {"track", "window_result", "rf"}}
                       for row in records]).to_csv(stage / "sources.csv", index=False, encoding="utf-8-sig")
-        manifest = dict(seed=seed, source_root=str(root), cases=cases,
+        manifest = dict(seed=seed, source_root=str(root), cases=cases, location_scale=location_scale,
                         piece_policy="StratifiedGroupKFold(5) over source groups; each piece is test once",
                         augmentation_policy="split first, then 9 variants per original inside each split; "
                         "profile estimated from the case train pieces only",
@@ -89,5 +91,8 @@ if __name__ == "__main__":
     parser.add_argument("--audit", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=20261111)
+    parser.add_argument("--location-scale", type=float, default=1.0,
+                        help="증강 위치 오차 배율 (기본 1 = 측정값 그대로). 분할·원본은 같고 증강 세기만 바뀐다")
     args = parser.parse_args()
-    build(args.input.resolve(), args.label_map.resolve(), args.audit.resolve(), args.output.resolve(), args.seed)
+    build(args.input.resolve(), args.label_map.resolve(), args.audit.resolve(), args.output.resolve(), args.seed,
+          args.location_scale)
