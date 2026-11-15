@@ -2,7 +2,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from ai_server.model_config import MODEL_NAME
+from importlib import import_module
+
+from ai_server.model_config import MODEL_NAME, SEQUENCE_MODEL
 
 from ai_server.routers.analyze import router as analyze_router
 from ai_server.routers.classify import router as classify_router
@@ -11,9 +13,8 @@ from ai_server.routers.ui import router as ui_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if MODEL_NAME == "minirocket":
-        from ai_server.classifiers.minirocket.prediction import get_classifier
-        get_classifier()
+    if SEQUENCE_MODEL:
+        import_module(f"ai_server.classifiers.{MODEL_NAME}.prediction").get_classifier()
     yield
 
 

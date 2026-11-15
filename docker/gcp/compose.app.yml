@@ -1,0 +1,95 @@
+# 앱 VM: API 게이트웨이(nginx) + 백엔드(Spring) + 파이 실시간 영상(중계·녹화·클립 추출).
+# 로드밸런서가 /api, /hls, /ai, /ai-minirocket, /local-api, /live 만 여기로 보낸다.
+# 프론트 정적 파일은 Cloud Storage + Cloud CDN 이 서빙하고, DB 는 Cloud SQL(사설 IP) 이다.
+#
+#   [현장] 파이 ─랜선─▶ 노트북 ─RTSP(TCP) 송출─▶ mediamtx:8554  (방화벽: 송출 노트북 IP 만)
+#   mediamtx ─▶ 녹화(./pi-runtime/recordings) + HLS(/live) ─▶ clip-bridge 가 10초 클립 추출 ─▶ AI VM
+#
+# .env: DB_HOST, DB_USERNAME, DB_PASSWORD, OPERATOR_USERNAME, OPERATOR_PASSWORD,
+#       AI_UPSTREAM(AI VM 내부 IP:8000), PI_FRONTEND_ORIGIN(브라우저가 여는 주소, 예 http://<LB IP>)
+# mediamtx.yml 은 mediamtx.cloud.yml.template 의 __PUBLISH_PASS__ 를 채워 VM 에서 만든다.
+#
+# backend 는 skydetect-backend main, clip-bridge 는 skydetect-ai main 의 GitHub Actions 가 레지스트리에 올리고
+# autodeploy.sh 가 1분마다 받아 온다. nginx·mediamtx 는 Docker Hub 의 고정 버전이다.
+#
+#   docker compose -f compose.app.yml --env-file .env up -d
+
+name: skydetect-app
+
+services:
+  backend:
+    image: asia-northeast3-docker.pkg.dev/skydetect-514809/skydetect/backend:main
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://${DB_HOST:?Set DB_HOST to the Cloud SQL private IP}:3306/skydetect?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
+      SPRING_DATASOURCE_USERNAME: ${DB_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD}
+      SKYDETECT_AUTH_INITIAL_OPERATOR_USERNAME: ${OPERATOR_USERNAME}
+      SKYDETECT_AUTH_INITIAL_OPERATOR_PASSWORD: ${OPERATOR_PASSWORD}
+      SKYDETECT_CLIPS_WORKER_URL: http://clip-bridge:8080
+      SKYDETECT_CLIPS_DIRECTORY: /pi-clips
+      TZ: Asia/Seoul
+    volumes:
+      - ./pi-runtime/clips:/pi-clips:ro
+    restart: unless-stopped
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.21.3
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+      - ./pi-runtime/recordings:/recordings
+    ports:
+      - "8554:8554"
+    restart: unless-stopped
+
+  relay-heartbeat:
+    image: asia-northeast3-docker.pkg.dev/skydetect-514809/skydetect/clip-bridge:main
+    command: ["python", "/heartbeat/relay_heartbeat.py"]
+    environment:
+      PI_RELAY_STATE: /runtime/status/state.json
+    volumes:
+      - ./relay_heartbeat.py:/heartbeat/relay_heartbeat.py:ro
+      - ./pi-runtime/status:/runtime/status
+    depends_on:
+      - mediamtx
+    restart: unless-stopped
+
+  clip-bridge:
+    image: asia-northeast3-docker.pkg.dev/skydetect-514809/skydetect/clip-bridge:main
+    environment:
+      PI_BRIDGE_DB: /runtime/local-bridge/jobs.sqlite3
+      PI_RECORDING_DIR: /runtime/recordings/pi
+      PI_CLIPS_DIR: /runtime/clips
+      PI_STAGE_DIR: /runtime/local-bridge/staging
+      PI_PIN_DIR: /runtime/pins/segments
+      PI_RELAY_STATE: /runtime/status/state.json
+      PI_BACKEND_URL: http://backend:8080
+      PI_RF_URL: http://${AI_UPSTREAM}
+      PI_MINIROCKET_URL: http://${AI_UPSTREAM}
+      PI_CLIP_MAX_BYTES: "4294967296"
+      PI_FRONTEND_ORIGIN: ${PI_FRONTEND_ORIGIN:?Set PI_FRONTEND_ORIGIN to the public site origin}
+      TZ: Asia/Seoul
+    volumes:
+      - ./pi-runtime/recordings:/runtime/recordings:ro
+      - ./pi-runtime/status:/runtime/status:ro
+      - ./pi-runtime/clips:/runtime/clips
+      - ./pi-runtime/local-bridge:/runtime/local-bridge
+      - ./pi-runtime/pins:/runtime/pins
+    depends_on:
+      - backend
+      - mediamtx
+    restart: unless-stopped
+
+  gateway:
+    image: nginx:1.27-alpine
+    depends_on:
+      - backend
+      - clip-bridge
+      - mediamtx
+    environment:
+      AI_UPSTREAM: ${AI_UPSTREAM:?Set AI_UPSTREAM to the AI VM internal address, e.g. 10.178.0.2:8000}
+    volumes:
+      # 공식 nginx 이미지가 시작할 때 templates/*.template 의 ${AI_UPSTREAM} 을 채워 conf.d 로 만든다.
+      - ./gateway.conf.template:/etc/nginx/templates/default.conf.template:ro
+    ports:
+      - "80:80"
+    restart: unless-stopped

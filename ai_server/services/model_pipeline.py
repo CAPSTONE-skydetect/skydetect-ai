@@ -21,8 +21,11 @@ if MODEL_NAME == "rf":
         }
         return prediction, features
 else:
+    from importlib import import_module
+
     from ai_server.classifiers.minirocket.contracts import ClassifyRequest
-    from ai_server.classifiers.minirocket.prediction import classify_track_sequence
+
+    classify_track_sequence = import_module(f"ai_server.classifiers.{MODEL_NAME}.prediction").classify_track_sequence
 
     def classify_track(track):
         return classify_track_sequence(ClassifyRequest(track_sequence=track)), None
