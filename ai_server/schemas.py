@@ -4,5 +4,7 @@ from ai_server.model_config import MODEL_NAME
 
 if MODEL_NAME == "rf":
     from ai_server.classifiers.rf.contracts import *
+elif MODEL_NAME == "multirocket":
+    from ai_server.classifiers.multirocket.contracts import *
 else:
     from ai_server.classifiers.minirocket.contracts import *

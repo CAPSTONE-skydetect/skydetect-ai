@@ -12,6 +12,8 @@ from ai_server.model_config import MODEL_NAME
 from ai_server.schemas import TrackSequence
 from tests.model_parity_probe import make_track, probe
 
+PARITY_FIXTURE = {"rf": "rf", "minirocket": "mini", "multirocket": "multi"}
+
 
 def assert_same(actual, expected):
     if isinstance(expected, dict):
@@ -29,7 +31,7 @@ def assert_same(actual, expected):
 
 
 def test_frozen_branch_classification_and_openapi_parity():
-    fixture = "rf" if MODEL_NAME == "rf" else "mini"
+    fixture = PARITY_FIXTURE[MODEL_NAME]
     expected = json.loads((Path(__file__).parent / "fixtures/model_parity" / f"{fixture}.json").read_text())
     assert_same(probe(), expected)
 
@@ -57,8 +59,8 @@ def test_frontend_manual_route_uses_selected_model(tmp_path, monkeypatch):
     assert body["model"] == MODEL_NAME
     assert body["tracks"] == [track.model_dump(mode="json")]
     assert set(body["download_urls"]) == {"source_video", *artifacts}
-    assert (body["features"] is None) == (MODEL_NAME == "minirocket")
-    fixture = "rf" if MODEL_NAME == "rf" else "mini"
+    assert (body["features"] is None) == (MODEL_NAME != "rf")
+    fixture = PARITY_FIXTURE[MODEL_NAME]
     expected = json.loads((Path(__file__).parent / "fixtures/model_parity" / f"{fixture}.json").read_text())
     body["prediction"].pop("processing_time_ms")
     assert_same(body["prediction"], expected["cases"]["smooth"]["response"])

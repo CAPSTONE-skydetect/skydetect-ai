@@ -31,7 +31,7 @@ docker compose up -d --build
 - 프론트: http://localhost:5173 (로그인: `.env` 의 `OPERATOR_USERNAME` / `OPERATOR_PASSWORD`)
 - 백엔드 Swagger: http://localhost:8080/swagger-ui.html
 - AI(RF): http://localhost:8000/docs
-- AI(MiniRocket): http://localhost:8001/docs  (기동 시 모델 준비로 20초쯤 걸린다)
+- AI(시퀀스 모델, 기본 MultiRocket Stack): http://localhost:8001/docs  (기동 시 모델 준비로 20초쯤 걸린다)
 - MySQL: localhost:3307 (호스트 MySQL 3306 과 겹치지 않게)
 
 ```bash
@@ -47,13 +47,18 @@ docker compose down -v           # DB 데이터까지 삭제
 브라우저 ──▶ frontend (nginx :5173)
               ├─ /api, /hls         ──▶ backend:8080 ──▶ mysql:3306
               ├─ /ai/*              ──▶ ai-rf:8000          (rf target)
-              └─ /ai-minirocket/*   ──▶ ai-minirocket:8000  (minirocket target)
+              └─ /ai-minirocket/*   ──▶ ai-minirocket:8000  (SEQUENCE_MODEL target, 기본 multirocket)
 ```
 
 - 화면 상단의 **RF | MiniRocket 토글**이 분석 요청을 어느 AI 로 보낼지 고른다.
   다음 분석부터 적용되고, 선택은 브라우저에 기억된다.
   결과 화면은 모델에 맞게 표시한다 (RF: 확률 %, MiniRocket: Ridge margin. 확률 아님).
 
+- 8001 시퀀스 모델 자리는 `.env` 의 `SEQUENCE_MODEL` 로 고른다. 기본 `multirocket` 은
+  MultiRocket Stack(멤버 baseline + framescale, 결합기 logit. 확률 아님)이고, `minirocket` 이면 단일 MiniRocket 이다.
+  서비스 이름은 프론트 프록시와 pi clip-bridge 가 찾는 `ai-minirocket` 그대로 둔다.
+  배포 번들은 `python -m research.c_part_deploy_train` 으로 5조각 전체 데이터에서 학습한다.
+  보고할 성능은 5-case 교차검증 값이다 (`research/output/c_part_cv5_FINAL_multirocket`).
 - `skydetect-frontend/nginx.conf` 가 `vite.config.js` 의 dev 프록시와 같은 규칙으로 중계한다.
   브라우저는 5173 하나만 보므로 same-origin 이 유지되어 세션/XSRF 쿠키가 그대로 동작한다.
 - 두 AI 서버는 이 저장소의 `storage/`, `artifacts/` 를 같이 마운트한다. 로컬 실행과 산출물을 공유한다.

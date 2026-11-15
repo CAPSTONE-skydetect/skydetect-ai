@@ -29,6 +29,15 @@ COPY ai_server ./ai_server
 COPY research ./research
 COPY models/minirocket_classifier.joblib ./models/minirocket_classifier.joblib
 
+# MultiRocket Stack: MiniRocket 과 같은 의존성(aeon), 체크포인트만 다르다.
+FROM runtime AS multirocket
+ENV SKYDETECT_MODEL=multirocket
+COPY requirements/minirocket.txt ./requirements.txt
+RUN pip install -r requirements.txt
+COPY ai_server ./ai_server
+COPY research ./research
+COPY models/multirocket_stack_classifier.joblib ./models/multirocket_stack_classifier.joblib
+
 # Last target preserves the historical default: docker build . runs RF.
 FROM runtime AS rf
 ENV SKYDETECT_MODEL=rf

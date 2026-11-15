@@ -64,19 +64,21 @@ services:
       SKYDETECT_TRACK_OUTPUT_DIR: /app/artifacts/manual_tracks
     volumes: &ai-volumes
       # 업로드/산출물은 두 서버가 같은 호스트 폴더를 쓴다.
-      # 모델 파일은 각 브랜치 이미지에 들어 있는 것을 쓰므로 마운트하지 않는다.
+      # 모델 파일은 같은 커밋에서 각 target 이미지로 복사하므로 마운트하지 않는다.
       - ../storage:/app/storage
       - ../artifacts:/app/artifacts
     ports:
       - "${AI_RF_HOST_PORT:-8000}:8000"
 
+  # 시퀀스 모델 자리. 프론트 /ai-minirocket 과 pi clip-bridge 가 이 서비스 이름으로 찾는다.
+  # 기본은 MultiRocket Stack. SEQUENCE_MODEL=minirocket 이면 단일 MiniRocket 으로 되돌린다.
   ai-minirocket:
     build:
       context: ..
-      target: minirocket
+      target: ${SEQUENCE_MODEL:-multirocket}
     environment:
       <<: *ai-env
-      SKYDETECT_MODEL: minirocket
+      SKYDETECT_MODEL: ${SEQUENCE_MODEL:-multirocket}
     volumes: *ai-volumes
     ports:
       - "${AI_MINIROCKET_HOST_PORT:-8001}:8000"
