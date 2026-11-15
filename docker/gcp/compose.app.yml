@@ -39,6 +39,9 @@ services:
       - ./pi-runtime/recordings:/recordings
     ports:
       - "8554:8554"
+      # WebRTC 미리보기 영상 (방화벽 skydetect-webrtc)
+      - "8189:8189/udp"
+      - "8189:8189/tcp"
     restart: unless-stopped
 
   relay-heartbeat:
