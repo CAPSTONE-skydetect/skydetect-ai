@@ -1,0 +1,63 @@
+# 앱 VM API 게이트웨이. skydetect-frontend/nginx.conf 의 프록시 규칙과 같고, 정적 파일은 CDN 이 맡는다.
+# RF 서버는 배포하지 않으므로 /ai/ 와 /ai-minirocket/ 를 모두 MultiRocket 서버로 보낸다.
+server {
+    listen 80;
+    server_name _;
+
+    client_max_body_size 1g;
+
+    # 로드밸런서 상태 확인용
+    location = /healthz {
+        access_log off;
+        return 200 "ok\n";
+    }
+
+    location /api/ {
+        proxy_pass http://backend:8080;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /hls/ {
+        proxy_pass http://backend:8080;
+        proxy_set_header Host $http_host;
+    }
+
+    # 파이 클립 작업 (clip-bridge). 내부용 경로는 밖에서 막는다.
+    location ^~ /local-api/internal/ {
+        return 404;
+    }
+
+    location /local-api/ {
+        proxy_pass http://clip-bridge:8080/;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_buffering off;
+    }
+
+    # 파이 실시간 미리보기 (MediaMTX HLS). 예: /live/pi/index.m3u8
+    location /live/ {
+        proxy_pass http://mediamtx:8888/;
+        # MediaMTX 가 쿠키 확인용으로 /pi/index.m3u8?cookieCheck=1 처럼 접두어 없는 주소로 302 를 보낸다.
+        proxy_redirect / /live/;
+        proxy_buffering off;
+        proxy_read_timeout 60s;
+    }
+
+    location /ai/ {
+        proxy_pass http://${AI_UPSTREAM}/;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_request_buffering off;
+    }
+
+    location /ai-minirocket/ {
+        proxy_pass http://${AI_UPSTREAM}/;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_request_buffering off;
+    }
+}

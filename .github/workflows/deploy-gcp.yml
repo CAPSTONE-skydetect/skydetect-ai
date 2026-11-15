@@ -1,0 +1,64 @@
+name: Deploy to GCP
+# main 에 push 되면 MultiRocket 추론 서버와 clip-bridge 이미지를 Artifact Registry 에 올린다.
+# VM(autodeploy.sh, docker/gcp/)이 1분 안에 새 :main 이미지를 받아 다시 띄운다.
+# GCP 인증은 Workload Identity Federation 이라 GitHub 에 키 파일을 두지 않는다
+# (GCP 쪽에서 CAPSTONE-skydetect 조직의 refs/heads/main 실행만 허용).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-gcp
+  cancel-in-progress: false
+
+env:
+  REGISTRY: asia-northeast3-docker.pkg.dev
+  IMAGE_ROOT: asia-northeast3-docker.pkg.dev/skydetect-514809/skydetect
+  WIF_PROVIDER: projects/375497460357/locations/global/workloadIdentityPools/github/providers/github
+  DEPLOY_SA: github-deployer@skydetect-514809.iam.gserviceaccount.com
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build MultiRocket server image
+        run: docker build --target multirocket -t skydetect-runtime .
+      - name: Run model regression tests
+        run: |
+          docker build -f docker/Dockerfile.test --build-arg RUNTIME_IMAGE=skydetect-runtime \
+            --build-arg TEST_REQUIREMENTS=requirements/minirocket.txt -t skydetect-check .
+          docker run --rm --network none skydetect-check
+
+  push:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SA }}
+          token_format: access_token
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - name: Build and push MultiRocket server
+        run: |
+          docker build --target multirocket \
+            -t "$IMAGE_ROOT/ai-multirocket:main" -t "$IMAGE_ROOT/ai-multirocket:${GITHUB_SHA::7}" .
+          docker push --all-tags "$IMAGE_ROOT/ai-multirocket"
+      - name: Build and push clip-bridge
+        run: |
+          docker build -t "$IMAGE_ROOT/clip-bridge:main" -t "$IMAGE_ROOT/clip-bridge:${GITHUB_SHA::7}" hardware/raspberry-pi/bridge
+          docker push --all-tags "$IMAGE_ROOT/clip-bridge"

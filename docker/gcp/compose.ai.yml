@@ -1,0 +1,22 @@
+# AI VM: MultiRocket Stack 추론 서버 (FastAPI). 외부에 열지 않고 앱 VM 의 게이트웨이만 내부망으로 접근한다.
+#   (GCP 기본 방화벽 default-allow-internal 이 VPC 내부 접근만 허용한다)
+#
+# 이미지는 GitHub Actions(skydetect-ai main)가 Artifact Registry 에 올리고 autodeploy.sh 가 1분마다 받아 온다.
+#
+#   docker compose -f compose.ai.yml up -d
+
+name: skydetect-ai
+
+services:
+  ai-minirocket:
+    image: asia-northeast3-docker.pkg.dev/skydetect-514809/skydetect/ai-multirocket:main
+    environment:
+      SKYDETECT_MODEL: multirocket
+      SKYDETECT_UPLOAD_DIR: /app/storage/uploads
+      SKYDETECT_TRACK_OUTPUT_DIR: /app/artifacts/manual_tracks
+    volumes:
+      - ./storage:/app/storage
+      - ./artifacts:/app/artifacts
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

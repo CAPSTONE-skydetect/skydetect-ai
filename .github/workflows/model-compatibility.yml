@@ -1,0 +1,39 @@
+name: Model compatibility
+on:
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [rf, minirocket, multirocket]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build model-specific runtime from shared source
+        run: docker build --target ${{ matrix.model }} -t skydetect-runtime .
+      - name: Build test-only layer
+        # 서버 이미지는 서빙 의존성만 담으므로 시퀀스 모델은 학습·평가 의존성을 테스트 층에 더한다.
+        run: |
+          extra=requirements.txt
+          if [ "${{ matrix.model }}" != rf ]; then extra=requirements/minirocket.txt; fi
+          docker build -f docker/Dockerfile.test --build-arg RUNTIME_IMAGE=skydetect-runtime --build-arg TEST_REQUIREMENTS=$extra -t skydetect-check .
+      - name: Compare frozen model outputs and shared contracts
+        run: docker run --rm --network none skydetect-check
+      - name: Hardware unit regression (no camera access)
+        if: matrix.model == 'rf'
+        run: docker run --rm --network none -v "$PWD/hardware:/hardware:ro" skydetect-check python -m unittest discover -s /hardware/raspberry-pi -p 'test_*.py' -q
+  clip-worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build standalone clip image
+        run: docker build -t skydetect-clip-check hardware/raspberry-pi/bridge
+      - name: Non-root FFmpeg extraction and PTS mapping
+        run: docker run --rm --network none --user 1000:1000 -v "$PWD/tests/clip_image_smoke.py:/tmp/smoke.py:ro" skydetect-clip-check python /tmp/smoke.py

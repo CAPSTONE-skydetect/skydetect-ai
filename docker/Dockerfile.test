@@ -1,0 +1,12 @@
+ARG RUNTIME_IMAGE=skydetect-unified-test-rf
+FROM ${RUNTIME_IMAGE}
+# 서버 이미지는 서빙에 필요한 것만 담는다. 테스트는 학습·평가 CLI 와 research 전체를 쓰므로
+# 그 모델의 전체 의존성(TEST_REQUIREMENTS)과 research 폴더를 여기서 더한다.
+# 시퀀스 모델: --build-arg TEST_REQUIREMENTS=requirements/minirocket.txt
+ARG TEST_REQUIREMENTS=requirements.txt
+COPY ${TEST_REQUIREMENTS} /tmp/test-requirements.txt
+RUN pip install -r /tmp/test-requirements.txt pytest==9.0.2
+COPY research ./research
+COPY tests ./tests
+COPY examples ./examples
+CMD ["python", "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"]

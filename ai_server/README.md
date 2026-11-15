@@ -1,19 +1,21 @@
-# AI Server Bootstrap
+# AI Server
 
-This folder contains the A-part bootstrap for SkyDetect-AI.
+This folder contains the shared API and the manual ROI A-part tracker for
+SkyDetect-AI.
 
 ## Current Focus
 
-- freeze shared schema first
-- provide a stable `TrackSequence` contract for B/C
-- keep detection, tracking, and stabilization loosely coupled
+- keep the shared `TrackSequence` contract stable for B/C
+- track a user-selected ROI without YOLOMG
+- keep predictions and debug data outside the A-to-B handoff
 
 ## Files
 
 - `schemas.py`: shared models for A/B/C handoff
-- `routers/analyze.py`: bootstrap FastAPI endpoint
-- `services/stabilization.py`: stabilization metadata helper
-- `services/detector.py`: detector placeholder
-- `services/tracker.py`: track bootstrap generator
-- `utils/quality.py`: basic quality scoring helper
+- `tracking_schemas.py`: A-only manual tracking request and tuning models
+- `routers/analyze.py`: manual ROI tracking endpoint
+- `services/manual_roi_tracker.py`: KLT, appearance, motion, and CMC engine
+- `services/tracking_adapter.py`: shared `TrackSequence` contract adapter
+- `services/tracker.py`: API pipeline orchestration
+- `utils/quality.py`: observed-track quality scoring
 - `docs/a_pipeline.md`: A-stage processing order

@@ -1,0 +1,84 @@
+{
+  "reproducibility": {
+    "same_sample_id": true,
+    "same_start": true,
+    "same_observations": false
+  },
+  "goal_projection": {
+    "position": [
+      100,
+      100,
+      80
+    ],
+    "cx_before": 0.303,
+    "cx_after": 0.1653,
+    "apparent_widths_per_s": 82.57045772536478
+  },
+  "hover": {
+    "seconds": 2,
+    "distance_m": 15.999999999999943,
+    "speed_m_s": 8
+  },
+  "dash": {
+    "before_m_s": 14,
+    "after_m_s": 14
+  },
+  "gap": [
+    {
+      "v_mean": 0.5996402158704782,
+      "v_std": 0,
+      "a_mean": 0,
+      "heading_change_ratio": 0,
+      "maneuverability_sigma": 119928.0191884918,
+      "label": "bird"
+    },
+    {
+      "v_mean": 1.079352388566861,
+      "v_std": 0.5875250232540109,
+      "a_mean": 26.983809714171528,
+      "heading_change_ratio": 0,
+      "maneuverability_sigma": 215870.43453928528,
+      "label": "bird"
+    }
+  ],
+  "real_verifier_gap": {
+    "v_mean": 1.0794,
+    "v_std": 0.5875,
+    "a_mean": 26.9838,
+    "heading_change_ratio": 0,
+    "maneuverability_sigma": 215870.4345
+  },
+  "straight_rule_filter": {
+    "passed": false,
+    "reject_reason": "high_noise"
+  },
+  "heading_order": {
+    "turn_counts": [
+      1,
+      99
+    ],
+    "features": [
+      {
+        "v_mean": 0.5996402158704778,
+        "v_std": 1.9918756304644354e-14,
+        "a_mean": 7.23259835860352e-13,
+        "heading_change_ratio": 0.2500000000000005,
+        "maneuverability_sigma": 0.4797106376215733,
+        "label": "bird"
+      },
+      {
+        "v_mean": 0.5996402158704881,
+        "v_std": 6.79752123410853e-15,
+        "a_mean": 2.3799144473328354e-13,
+        "heading_change_ratio": 0.25000000000000594,
+        "maneuverability_sigma": 0.47971063762157107,
+        "label": "bird"
+      }
+    ],
+    "equal_with_tolerance": true
+  },
+  "no_recovery_drift": {
+    "cx_frame_10": 0.52,
+    "cx_frame_11": 0.5
+  }
+}

@@ -1,0 +1,631 @@
+{
+  "cases": {
+    "fps60": {
+      "features": {
+        "feature_status": "ok",
+        "features": {
+          "acceleration_median": 139.08023855132788,
+          "acceleration_p95": 191.0239509730355,
+          "curvature_cv": 1.0188353834276849,
+          "heading_change_ratio": 0.8175675675675674,
+          "speed_cv": 0.22435345563873982,
+          "speed_median": 76.73064682391961,
+          "tortuosity": 1.581643269538311,
+          "turn_rate_median": 1.7685462843222364,
+          "turn_rate_p95": 6.686837857535558
+        },
+        "imputed_fields": [],
+        "provenance": {
+          "aspect_ratio_matches_training": true,
+          "canonical_height": 1080,
+          "canonical_width": 1920,
+          "coordinate_policy": "fhd_width_1920_v1",
+          "coordinate_scale": 1.5,
+          "feature_config_id": "231df697e717ad91",
+          "feature_contract_id": "2b24fd97b83b221b",
+          "feature_version": "4.0.0",
+          "source_processed_height": 720,
+          "source_processed_width": 1280,
+          "target_feature_fps": 30,
+          "timebase_policy": "timestamp_ms_priority_30hz_resample_v1"
+        },
+        "quality": {
+          "mean_conf": 0.9,
+          "missing_ratio": 0,
+          "num_points": 300,
+          "track_stability": "good"
+        },
+        "track_id": 7
+      },
+      "response": {
+        "base_drone_proba": 0.5001066666666667,
+        "confidence": 0.558731038569274,
+        "feature_contributions": {
+          "acceleration_median": -0.06553237125962562,
+          "acceleration_p95": 0.027015485494723133,
+          "curvature_cv": 0.028680804545243462,
+          "heading_change_ratio": -0.09953195961610273,
+          "speed_cv": 0.17477772744371114,
+          "speed_median": -0.04303961798427774,
+          "tortuosity": -0.06150303720896298,
+          "turn_rate_median": 0.03393360446876675,
+          "turn_rate_p95": 0.06382373601913177
+        },
+        "label": "uncertain",
+        "quality": {
+          "feature_status": "ok",
+          "mean_conf": 0.9,
+          "num_points": 300,
+          "track_stability": "good"
+        },
+        "rule_filter": {
+          "passed": true,
+          "reject_reason": null
+        },
+        "top_features": {
+          "speed_median": 0.2809,
+          "tortuosity": 0.4164,
+          "turn_rate_median": 0.3027
+        },
+        "track_id": 7
+      }
+    },
+    "long_gap": {
+      "features": {
+        "feature_status": "ok",
+        "features": {
+          "acceleration_median": 141.30078104929538,
+          "acceleration_p95": 191.53146201009767,
+          "curvature_cv": 0.960844037173352,
+          "heading_change_ratio": 0.8385094836770486,
+          "speed_cv": 0.23192178579869357,
+          "speed_median": 74.06191209072311,
+          "tortuosity": 1.5408107099291701,
+          "turn_rate_median": 2.108753923761104,
+          "turn_rate_p95": 6.749552830934284
+        },
+        "imputed_fields": [],
+        "provenance": {
+          "aspect_ratio_matches_training": true,
+          "canonical_height": 1080,
+          "canonical_width": 1920,
+          "coordinate_policy": "fhd_width_1920_v1",
+          "coordinate_scale": 1.5,
+          "feature_config_id": "231df697e717ad91",
+          "feature_contract_id": "2b24fd97b83b221b",
+          "feature_version": "4.0.0",
+          "source_processed_height": 720,
+          "source_processed_width": 1280,
+          "target_feature_fps": 30,
+          "timebase_policy": "timestamp_ms_priority_30hz_resample_v1"
+        },
+        "quality": {
+          "mean_conf": 0.9,
+          "missing_ratio": 0.08333333333333333,
+          "num_points": 165,
+          "track_stability": "good"
+        },
+        "track_id": 7
+      },
+      "response": {
+        "base_drone_proba": 0.5001066666666667,
+        "confidence": 0.5736199274581629,
+        "feature_contributions": {
+          "acceleration_median": -0.06313511521147953,
+          "acceleration_p95": 0.027015485494723133,
+          "curvature_cv": 0.028898970432356938,
+          "heading_change_ratio": -0.08010922681987694,
+          "speed_cv": 0.1642266574888106,
+          "speed_median": -0.04201670763661507,
+          "tortuosity": -0.07012966522509836,
+          "turn_rate_median": 0.04094501675543407,
+          "turn_rate_p95": 0.06781784551324127
+        },
+        "label": "uncertain",
+        "quality": {
+          "feature_status": "ok",
+          "mean_conf": 0.9,
+          "num_points": 165,
+          "track_stability": "good"
+        },
+        "rule_filter": {
+          "passed": true,
+          "reject_reason": null
+        },
+        "top_features": {
+          "speed_median": 0.2809,
+          "tortuosity": 0.4164,
+          "turn_rate_median": 0.3027
+        },
+        "track_id": 7
+      }
+    },
+    "low_conf": {
+      "features": {
+        "feature_status": "ok",
+        "features": {
+          "acceleration_median": 132.5311523201688,
+          "acceleration_p95": 190.61458578816274,
+          "curvature_cv": 1.0203430049188638,
+          "heading_change_ratio": 0.8310810810810807,
+          "speed_cv": 0.22485861230511445,
+          "speed_median": 76.96163716643608,
+          "tortuosity": 1.5828484094484205,
+          "turn_rate_median": 1.7814762281409005,
+          "turn_rate_p95": 6.737560841422347
+        },
+        "imputed_fields": [],
+        "provenance": {
+          "aspect_ratio_matches_training": true,
+          "canonical_height": 1080,
+          "canonical_width": 1920,
+          "coordinate_policy": "fhd_width_1920_v1",
+          "coordinate_scale": 1.5,
+          "feature_config_id": "231df697e717ad91",
+          "feature_contract_id": "2b24fd97b83b221b",
+          "feature_version": "4.0.0",
+          "source_processed_height": 720,
+          "source_processed_width": 1280,
+          "target_feature_fps": 30,
+          "timebase_policy": "timestamp_ms_priority_30hz_resample_v1"
+        },
+        "quality": {
+          "mean_conf": 0.1,
+          "missing_ratio": 0,
+          "num_points": 150,
+          "track_stability": "poor"
+        },
+        "track_id": 7
+      },
+      "response": {
+        "base_drone_proba": null,
+        "confidence": 0,
+        "feature_contributions": {},
+        "label": "uncertain",
+        "quality": {
+          "feature_status": "ok",
+          "mean_conf": 0.1,
+          "num_points": 150,
+          "track_stability": "poor"
+        },
+        "rule_filter": {
+          "passed": false,
+          "reject_reason": "low_confidence"
+        },
+        "top_features": {},
+        "track_id": 7
+      }
+    },
+    "short": {
+      "features": {
+        "feature_status": "ok",
+        "features": {
+          "acceleration_median": 144.20290451244162,
+          "acceleration_p95": 190.29548271542845,
+          "curvature_cv": 1.120353275053519,
+          "heading_change_ratio": 0.7500000000000002,
+          "speed_cv": 0.22240268410816538,
+          "speed_median": 82.2924495421089,
+          "tortuosity": 1.5720981249776986,
+          "turn_rate_median": 1.3134908993682999,
+          "turn_rate_p95": 6.524596897626704
+        },
+        "imputed_fields": [],
+        "provenance": {
+          "aspect_ratio_matches_training": true,
+          "canonical_height": 1080,
+          "canonical_width": 1920,
+          "coordinate_policy": "fhd_width_1920_v1",
+          "coordinate_scale": 1.5,
+          "feature_config_id": "231df697e717ad91",
+          "feature_contract_id": "2b24fd97b83b221b",
+          "feature_version": "4.0.0",
+          "source_processed_height": 720,
+          "source_processed_width": 1280,
+          "target_feature_fps": 30,
+          "timebase_policy": "timestamp_ms_priority_30hz_resample_v1"
+        },
+        "quality": {
+          "mean_conf": 0.9,
+          "missing_ratio": 0,
+          "num_points": 30,
+          "track_stability": "good"
+        },
+        "track_id": 7
+      },
+      "response": {
+        "base_drone_proba": 0.5001066666666667,
+        "confidence": 0.5439485041102687,
+        "feature_contributions": {
+          "acceleration_median": -0.06853578983327932,
+          "acceleration_p95": 0.024068668385413407,
+          "curvature_cv": 0.035108721301723204,
+          "heading_change_ratio": -0.10314540926308843,
+          "speed_cv": 0.17580181754619328,
+          "speed_median": -0.04886421059721203,
+          "tortuosity": -0.06457848948608094,
+          "turn_rate_median": -0.06324217219073612,
+          "turn_rate_p95": 0.06933169336013144
+        },
+        "label": "uncertain",
+        "quality": {
+          "feature_status": "ok",
+          "mean_conf": 0.9,
+          "num_points": 30,
+          "track_stability": "good"
+        },
+        "rule_filter": {
+          "passed": true,
+          "reject_reason": null
+        },
+        "top_features": {
+          "speed_median": 0.2809,
+          "tortuosity": 0.4164,
+          "turn_rate_median": 0.3027
+        },
+        "track_id": 7
+      }
+    },
+    "smooth": {
+      "features": {
+        "feature_status": "ok",
+        "features": {
+          "acceleration_median": 132.5311523201688,
+          "acceleration_p95": 190.61458578816274,
+          "curvature_cv": 1.0203430049188638,
+          "heading_change_ratio": 0.8310810810810807,
+          "speed_cv": 0.22485861230511445,
+          "speed_median": 76.96163716643608,
+          "tortuosity": 1.5828484094484205,
+          "turn_rate_median": 1.7814762281409005,
+          "turn_rate_p95": 6.737560841422347
+        },
+        "imputed_fields": [],
+        "provenance": {
+          "aspect_ratio_matches_training": true,
+          "canonical_height": 1080,
+          "canonical_width": 1920,
+          "coordinate_policy": "fhd_width_1920_v1",
+          "coordinate_scale": 1.5,
+          "feature_config_id": "231df697e717ad91",
+          "feature_contract_id": "2b24fd97b83b221b",
+          "feature_version": "4.0.0",
+          "source_processed_height": 720,
+          "source_processed_width": 1280,
+          "target_feature_fps": 30,
+          "timebase_policy": "timestamp_ms_priority_30hz_resample_v1"
+        },
+        "quality": {
+          "mean_conf": 0.9,
+          "missing_ratio": 0,
+          "num_points": 150,
+          "track_stability": "good"
+        },
+        "track_id": 7
+      },
+      "response": {
+        "base_drone_proba": 0.5001066666666667,
+        "confidence": 0.558731038569274,
+        "feature_contributions": {
+          "acceleration_median": -0.06553237125962562,
+          "acceleration_p95": 0.027015485494723133,
+          "curvature_cv": 0.028680804545243462,
+          "heading_change_ratio": -0.09953195961610273,
+          "speed_cv": 0.17477772744371114,
+          "speed_median": -0.04303961798427774,
+          "tortuosity": -0.06150303720896298,
+          "turn_rate_median": 0.03393360446876675,
+          "turn_rate_p95": 0.06382373601913177
+        },
+        "label": "uncertain",
+        "quality": {
+          "feature_status": "ok",
+          "mean_conf": 0.9,
+          "num_points": 150,
+          "track_stability": "good"
+        },
+        "rule_filter": {
+          "passed": true,
+          "reject_reason": null
+        },
+        "top_features": {
+          "speed_median": 0.2809,
+          "tortuosity": 0.4164,
+          "turn_rate_median": 0.3027
+        },
+        "track_id": 7
+      }
+    },
+    "tiny": {
+      "features": {
+        "feature_status": "failed",
+        "features": null,
+        "imputed_fields": [],
+        "provenance": {
+          "aspect_ratio_matches_training": true,
+          "canonical_height": 1080,
+          "canonical_width": 1920,
+          "coordinate_policy": "fhd_width_1920_v1",
+          "coordinate_scale": 1.5,
+          "feature_config_id": "231df697e717ad91",
+          "feature_contract_id": "2b24fd97b83b221b",
+          "feature_version": "4.0.0",
+          "source_processed_height": 720,
+          "source_processed_width": 1280,
+          "target_feature_fps": 30,
+          "timebase_policy": "timestamp_ms_priority_30hz_resample_v1"
+        },
+        "quality": {
+          "mean_conf": 0.9,
+          "missing_ratio": 0,
+          "num_points": 4,
+          "track_stability": "good"
+        },
+        "track_id": 7
+      },
+      "response": {
+        "base_drone_proba": null,
+        "confidence": 0,
+        "feature_contributions": {},
+        "label": "uncertain",
+        "quality": {
+          "feature_status": "failed",
+          "mean_conf": 0.9,
+          "num_points": 4,
+          "track_stability": "good"
+        },
+        "rule_filter": {
+          "passed": false,
+          "reject_reason": "feature_error"
+        },
+        "top_features": {},
+        "track_id": 7
+      }
+    },
+    "unstabilized": {
+      "features": {
+        "feature_status": "ok",
+        "features": {
+          "acceleration_median": 132.5311523201688,
+          "acceleration_p95": 190.61458578816274,
+          "curvature_cv": 1.0203430049188638,
+          "heading_change_ratio": 0.8310810810810807,
+          "speed_cv": 0.22485861230511445,
+          "speed_median": 76.96163716643608,
+          "tortuosity": 1.5828484094484205,
+          "turn_rate_median": 1.7814762281409005,
+          "turn_rate_p95": 6.737560841422347
+        },
+        "imputed_fields": [],
+        "provenance": {
+          "aspect_ratio_matches_training": true,
+          "canonical_height": 1080,
+          "canonical_width": 1920,
+          "coordinate_policy": "fhd_width_1920_v1",
+          "coordinate_scale": 1.5,
+          "feature_config_id": "231df697e717ad91",
+          "feature_contract_id": "2b24fd97b83b221b",
+          "feature_version": "4.0.0",
+          "source_processed_height": 720,
+          "source_processed_width": 1280,
+          "target_feature_fps": 30,
+          "timebase_policy": "timestamp_ms_priority_30hz_resample_v1"
+        },
+        "quality": {
+          "mean_conf": 0.9,
+          "missing_ratio": 0,
+          "num_points": 150,
+          "track_stability": "good"
+        },
+        "track_id": 7
+      },
+      "response": {
+        "base_drone_proba": 0.5001066666666667,
+        "confidence": 0.558731038569274,
+        "feature_contributions": {
+          "acceleration_median": -0.06553237125962562,
+          "acceleration_p95": 0.027015485494723133,
+          "curvature_cv": 0.028680804545243462,
+          "heading_change_ratio": -0.09953195961610273,
+          "speed_cv": 0.17477772744371114,
+          "speed_median": -0.04303961798427774,
+          "tortuosity": -0.06150303720896298,
+          "turn_rate_median": 0.03393360446876675,
+          "turn_rate_p95": 0.06382373601913177
+        },
+        "label": "uncertain",
+        "quality": {
+          "feature_status": "ok",
+          "mean_conf": 0.9,
+          "num_points": 150,
+          "track_stability": "good"
+        },
+        "rule_filter": {
+          "passed": true,
+          "reject_reason": null
+        },
+        "top_features": {
+          "speed_median": 0.2809,
+          "tortuosity": 0.4164,
+          "turn_rate_median": 0.3027
+        },
+        "track_id": 7
+      }
+    }
+  },
+  "classify_request_schema": {
+    "additionalProperties": false,
+    "description": "분류 요청 payload를 담는 모델.\n\n한 줄 설명:\n    Spring Boot → FastAPI classifier로 들어오는 입력 형식.\n\n왜 이렇게 했는가:\n    품질 threshold는 상황에 따라 override하고 싶을 수 있어서,\n    기본 feature_vector와 함께 선택적 threshold 파라미터를 받도록 했다.\n\n필드:\n    feature_vector (FeatureVector): B가 만든 특징 패키지\n    min_track_length (int | None): 최소 유효 트랙 길이 override\n    min_mean_conf (float | None): 최소 평균 신뢰도 override\n    max_missing_ratio (float | None): 최대 누락 비율 override",
+    "example": {
+      "feature_vector": {
+        "feature_status": "ok",
+        "features": {
+          "acceleration_median": 27.89,
+          "acceleration_p95": 76.84,
+          "curvature_cv": 0.93,
+          "heading_change_ratio": 0.19,
+          "speed_cv": 0.21,
+          "speed_median": 74.67,
+          "tortuosity": 1.01,
+          "turn_rate_median": 0.25,
+          "turn_rate_p95": 0.94
+        },
+        "imputed_fields": [],
+        "quality": {
+          "mean_conf": 0.9,
+          "missing_ratio": 0.05,
+          "num_points": 10,
+          "track_stability": "good"
+        },
+        "track_id": 1
+      }
+    },
+    "properties": {
+      "feature_vector": {
+        "$ref": "#/components/schemas/FeatureVector"
+      },
+      "max_missing_ratio": {
+        "anyOf": [
+          {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "최대 허용 누락 비율",
+        "title": "Max Missing Ratio"
+      },
+      "min_mean_conf": {
+        "anyOf": [
+          {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "최소 평균 탐지 신뢰도",
+        "title": "Min Mean Conf"
+      },
+      "min_track_length": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "최소 유효 트랙 길이",
+        "title": "Min Track Length"
+      }
+    },
+    "required": [
+      "feature_vector"
+    ],
+    "title": "ClassifyRequest",
+    "type": "object"
+  },
+  "fixtures_sha256": "5ae5362c7c8c53c5a651f8cc9fd9fe96c7f9c435494be7b27ab1aa4e6b8d36b2",
+  "model": "rf",
+  "paths": [
+    "/analyze",
+    "/api/files",
+    "/api/tracks/manual",
+    "/api/videos/upload",
+    "/classify",
+    "/classify/rule-filter",
+    "/health"
+  ],
+  "prediction_schema": {
+    "additionalProperties": false,
+    "description": "최종 분류 결과를 담는 모델.\n\n한 줄 설명:\n    C가 계산한 label / confidence / 품질 / 설명용 top feature를 함께 반환한다.\n\n왜 이렇게 했는가:\n    단순 label만 반환하면 왜 uncertain이 되었는지, 어떤 품질 상태였는지,\n    어떤 feature가 상대적으로 중요했는지 알기 어렵다.\n    그래서 운영/디버깅/프론트 연동에 필요한 최소 정보를 함께 묶었다.\n\n필드:\n    track_id (int): 대응 track 식별자\n    label (PredictionLabel): bird / drone / uncertain\n    confidence (float): 예측 확률\n    rule_filter (RuleFilterResult): 규칙 기반 필터 결과\n    top_features (dict[str, float]): 상대적 기여도가 큰 feature들 (모델 전체 기준)\n    quality (ResponseQuality): 품질 요약\n    processing_time_ms (int | None): 처리 시간(ms)\n    base_drone_proba (float | None): 이 궤적의 판정 근거 - 트리 루트의 평균 드론 확률\n    feature_contributions (dict[str, float]): 이 궤적의 판정 근거 - 피처별 드론 확률 기여.\n        양수면 드론 쪽, 음수면 새 쪽. base_drone_proba + 합 = 드론 확률.\n        규칙 필터에서 탈락해 모델을 부르지 않았으면 비어 있다.",
+    "properties": {
+      "base_drone_proba": {
+        "anyOf": [
+          {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "기여 분해의 기준값",
+        "title": "Base Drone Proba"
+      },
+      "confidence": {
+        "description": "RF 예측 확률 (uncertain 시 0.0)",
+        "maximum": 1,
+        "minimum": 0,
+        "title": "Confidence",
+        "type": "number"
+      },
+      "feature_contributions": {
+        "additionalProperties": {
+          "type": "number"
+        },
+        "description": "피처별 드론 확률 기여 (양수 = 드론 쪽)",
+        "title": "Feature Contributions",
+        "type": "object"
+      },
+      "label": {
+        "enum": [
+          "bird",
+          "drone",
+          "uncertain"
+        ],
+        "title": "Label",
+        "type": "string"
+      },
+      "processing_time_ms": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "FastAPI 내부 처리 시간 (ms)",
+        "title": "Processing Time Ms"
+      },
+      "quality": {
+        "$ref": "#/components/schemas/ResponseQuality"
+      },
+      "rule_filter": {
+        "$ref": "#/components/schemas/RuleFilterResult"
+      },
+      "top_features": {
+        "additionalProperties": {
+          "type": "number"
+        },
+        "description": "RF 중요도 기반 상위 특징",
+        "title": "Top Features",
+        "type": "object"
+      },
+      "track_id": {
+        "minimum": 0,
+        "title": "Track Id",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "track_id",
+      "label",
+      "confidence",
+      "rule_filter",
+      "quality"
+    ],
+    "title": "PredictionResult",
+    "type": "object"
+  }
+}

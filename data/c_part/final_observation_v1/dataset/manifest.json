@@ -1,0 +1,471 @@
+{
+  "seed": 20261111,
+  "source_root": "originals",
+  "label_map": "label_map.csv",
+  "scenarios": {
+    "A": [
+      "train_real",
+      "validation_real",
+      "test_real"
+    ],
+    "B": [
+      "train_augmented",
+      "validation_real",
+      "test_real"
+    ],
+    "D": [
+      "train_augmented",
+      "validation_augmented",
+      "test_augmented"
+    ]
+  },
+  "packages": {
+    "train_real": {
+      "tracks": {
+        "bird": 167,
+        "drone": 151
+      },
+      "minirocket_tracks": {
+        "bird": 166,
+        "drone": 151
+      },
+      "minirocket_windows": {
+        "bird": 395,
+        "drone": 764
+      },
+      "rf_accepted": {
+        "bird": 167,
+        "drone": 151
+      }
+    },
+    "train_augmented": {
+      "tracks": {
+        "bird": 1670,
+        "drone": 1510
+      },
+      "minirocket_tracks": {
+        "bird": 1626,
+        "drone": 1475
+      },
+      "minirocket_windows": {
+        "bird": 3545,
+        "drone": 6137
+      },
+      "rf_accepted": {
+        "bird": 1670,
+        "drone": 1510
+      }
+    },
+    "validation_real": {
+      "tracks": {
+        "bird": 55,
+        "drone": 51
+      },
+      "minirocket_tracks": {
+        "bird": 55,
+        "drone": 51
+      },
+      "minirocket_windows": {
+        "bird": 139,
+        "drone": 182
+      },
+      "rf_accepted": {
+        "bird": 55,
+        "drone": 51
+      }
+    },
+    "validation_augmented": {
+      "tracks": {
+        "bird": 550,
+        "drone": 510
+      },
+      "minirocket_tracks": {
+        "bird": 539,
+        "drone": 496
+      },
+      "minirocket_windows": {
+        "bird": 1263,
+        "drone": 1479
+      },
+      "rf_accepted": {
+        "bird": 550,
+        "drone": 510
+      }
+    },
+    "test_real": {
+      "tracks": {
+        "bird": 55,
+        "drone": 51
+      },
+      "minirocket_tracks": {
+        "bird": 55,
+        "drone": 51
+      },
+      "minirocket_windows": {
+        "bird": 127,
+        "drone": 258
+      },
+      "rf_accepted": {
+        "bird": 55,
+        "drone": 51
+      }
+    },
+    "test_augmented": {
+      "tracks": {
+        "bird": 550,
+        "drone": 510
+      },
+      "minirocket_tracks": {
+        "bird": 543,
+        "drone": 489
+      },
+      "minirocket_windows": {
+        "bird": 1182,
+        "drone": 2013
+      },
+      "rf_accepted": {
+        "bird": 550,
+        "drone": 510
+      }
+    },
+    "fold_0_train_augmented": {
+      "tracks": {
+        "bird": 1330,
+        "drone": 1210
+      },
+      "minirocket_tracks": {
+        "bird": 1296,
+        "drone": 1172
+      },
+      "minirocket_windows": {
+        "bird": 2829,
+        "drone": 5092
+      },
+      "rf_accepted": {
+        "bird": 1330,
+        "drone": 1210
+      }
+    },
+    "fold_1_train_augmented": {
+      "tracks": {
+        "bird": 1340,
+        "drone": 1200
+      },
+      "minirocket_tracks": {
+        "bird": 1305,
+        "drone": 1171
+      },
+      "minirocket_windows": {
+        "bird": 2776,
+        "drone": 4893
+      },
+      "rf_accepted": {
+        "bird": 1340,
+        "drone": 1200
+      }
+    },
+    "fold_2_train_augmented": {
+      "tracks": {
+        "bird": 1330,
+        "drone": 1210
+      },
+      "minirocket_tracks": {
+        "bird": 1296,
+        "drone": 1188
+      },
+      "minirocket_windows": {
+        "bird": 2826,
+        "drone": 5053
+      },
+      "rf_accepted": {
+        "bird": 1330,
+        "drone": 1210
+      }
+    },
+    "fold_3_train_augmented": {
+      "tracks": {
+        "bird": 1340,
+        "drone": 1210
+      },
+      "minirocket_tracks": {
+        "bird": 1302,
+        "drone": 1184
+      },
+      "minirocket_windows": {
+        "bird": 2730,
+        "drone": 4741
+      },
+      "rf_accepted": {
+        "bird": 1340,
+        "drone": 1210
+      }
+    },
+    "fold_4_train_augmented": {
+      "tracks": {
+        "bird": 1340,
+        "drone": 1210
+      },
+      "minirocket_tracks": {
+        "bird": 1315,
+        "drone": 1184
+      },
+      "minirocket_windows": {
+        "bird": 2973,
+        "drone": 4742
+      },
+      "rf_accepted": {
+        "bird": 1340,
+        "drone": 1210
+      }
+    }
+  },
+  "fold_count": 5,
+  "fold_policy": "train_real.fold == k is real validation for all scenarios; train_real.fold != k is A fit; fold_k_train_augmented is B/D fit",
+  "group_policy": "source ID, exact center hash and original-name family; recording sessions without provenance are unverified",
+  "variants_per_track": [
+    "original",
+    "location_error",
+    "short_gap",
+    "both",
+    "location_error",
+    "short_gap",
+    "both",
+    "location_error",
+    "short_gap",
+    "both"
+  ],
+  "calibration": {
+    "outer_train": {
+      "reference": "reviewed image-derived center proxy, not manual ground truth",
+      "canonical_width_px": 1920.0,
+      "radius_p95_px": 1.8463831689450239,
+      "retained_offsets": 137,
+      "gap_counts": {
+        "2": 7,
+        "1": 22
+      },
+      "sources": [
+        {
+          "group": "group-2514eb88479a5254",
+          "source": "calibration/visual_centers/드론21_track_sequence_proxy.csv",
+          "sha256": "74554ce008892371776cfe37ec0175e39a5c76b55d518fb883716b11e7adb911"
+        },
+        {
+          "group": "group-8bac11ac5b549b8f",
+          "source": "calibration/visual_centers/드론22_tracksequence_proxy.csv",
+          "sha256": "518976cd8a8a06fabe303ab8eff2378b148eaf05def99672b7748b376b2c3cbc"
+        },
+        {
+          "group": "group-1423bfc166f8d8c2",
+          "source": "calibration/visual_centers/새24_tracksequence_proxy.csv",
+          "sha256": "93dc0ea6c1106682f466e4d0c0eb45e65e0e294997ffb0a145a1c4f52626d1b4"
+        },
+        {
+          "group": "group-e2d3cd4decefa623",
+          "source": "calibration/visual_centers/새30(1)_tracksequence_proxy.csv",
+          "sha256": "7874edd16f4885f579a693382da08c7f0712f51c0e917d62da18d40fb2b49633"
+        },
+        {
+          "group": "group-86e51c1909330da6",
+          "source": "calibration/visual_centers/새36(1)_tracksequence_proxy.csv",
+          "sha256": "9995bdbb7de8e81b2fe2515d22a241a06d21718c4b1f863ff9ac6b30ae0d3dec"
+        }
+      ]
+    },
+    "fold_0_train_augmented": {
+      "reference": "reviewed image-derived center proxy, not manual ground truth",
+      "canonical_width_px": 1920.0,
+      "radius_p95_px": 1.8463831689450239,
+      "retained_offsets": 137,
+      "gap_counts": {
+        "2": 5,
+        "1": 21
+      },
+      "sources": [
+        {
+          "group": "group-2514eb88479a5254",
+          "source": "calibration/visual_centers/드론21_track_sequence_proxy.csv",
+          "sha256": "74554ce008892371776cfe37ec0175e39a5c76b55d518fb883716b11e7adb911"
+        },
+        {
+          "group": "group-8bac11ac5b549b8f",
+          "source": "calibration/visual_centers/드론22_tracksequence_proxy.csv",
+          "sha256": "518976cd8a8a06fabe303ab8eff2378b148eaf05def99672b7748b376b2c3cbc"
+        },
+        {
+          "group": "group-1423bfc166f8d8c2",
+          "source": "calibration/visual_centers/새24_tracksequence_proxy.csv",
+          "sha256": "93dc0ea6c1106682f466e4d0c0eb45e65e0e294997ffb0a145a1c4f52626d1b4"
+        },
+        {
+          "group": "group-e2d3cd4decefa623",
+          "source": "calibration/visual_centers/새30(1)_tracksequence_proxy.csv",
+          "sha256": "7874edd16f4885f579a693382da08c7f0712f51c0e917d62da18d40fb2b49633"
+        },
+        {
+          "group": "group-86e51c1909330da6",
+          "source": "calibration/visual_centers/새36(1)_tracksequence_proxy.csv",
+          "sha256": "9995bdbb7de8e81b2fe2515d22a241a06d21718c4b1f863ff9ac6b30ae0d3dec"
+        }
+      ]
+    },
+    "fold_1_train_augmented": {
+      "reference": "reviewed image-derived center proxy, not manual ground truth",
+      "canonical_width_px": 1920.0,
+      "radius_p95_px": 1.884876859285881,
+      "retained_offsets": 109,
+      "gap_counts": {
+        "2": 6,
+        "1": 12
+      },
+      "sources": [
+        {
+          "group": "group-2514eb88479a5254",
+          "source": "calibration/visual_centers/드론21_track_sequence_proxy.csv",
+          "sha256": "74554ce008892371776cfe37ec0175e39a5c76b55d518fb883716b11e7adb911"
+        },
+        {
+          "group": "group-8bac11ac5b549b8f",
+          "source": "calibration/visual_centers/드론22_tracksequence_proxy.csv",
+          "sha256": "518976cd8a8a06fabe303ab8eff2378b148eaf05def99672b7748b376b2c3cbc"
+        },
+        {
+          "group": "group-e2d3cd4decefa623",
+          "source": "calibration/visual_centers/새30(1)_tracksequence_proxy.csv",
+          "sha256": "7874edd16f4885f579a693382da08c7f0712f51c0e917d62da18d40fb2b49633"
+        },
+        {
+          "group": "group-86e51c1909330da6",
+          "source": "calibration/visual_centers/새36(1)_tracksequence_proxy.csv",
+          "sha256": "9995bdbb7de8e81b2fe2515d22a241a06d21718c4b1f863ff9ac6b30ae0d3dec"
+        }
+      ]
+    },
+    "fold_2_train_augmented": {
+      "reference": "reviewed image-derived center proxy, not manual ground truth",
+      "canonical_width_px": 1920.0,
+      "radius_p95_px": 0.7052425662577889,
+      "retained_offsets": 114,
+      "gap_counts": {
+        "2": 7,
+        "1": 17
+      },
+      "sources": [
+        {
+          "group": "group-2514eb88479a5254",
+          "source": "calibration/visual_centers/드론21_track_sequence_proxy.csv",
+          "sha256": "74554ce008892371776cfe37ec0175e39a5c76b55d518fb883716b11e7adb911"
+        },
+        {
+          "group": "group-8bac11ac5b549b8f",
+          "source": "calibration/visual_centers/드론22_tracksequence_proxy.csv",
+          "sha256": "518976cd8a8a06fabe303ab8eff2378b148eaf05def99672b7748b376b2c3cbc"
+        },
+        {
+          "group": "group-1423bfc166f8d8c2",
+          "source": "calibration/visual_centers/새24_tracksequence_proxy.csv",
+          "sha256": "93dc0ea6c1106682f466e4d0c0eb45e65e0e294997ffb0a145a1c4f52626d1b4"
+        },
+        {
+          "group": "group-86e51c1909330da6",
+          "source": "calibration/visual_centers/새36(1)_tracksequence_proxy.csv",
+          "sha256": "9995bdbb7de8e81b2fe2515d22a241a06d21718c4b1f863ff9ac6b30ae0d3dec"
+        }
+      ]
+    },
+    "fold_3_train_augmented": {
+      "reference": "reviewed image-derived center proxy, not manual ground truth",
+      "canonical_width_px": 1920.0,
+      "radius_p95_px": 2.0068566934979035,
+      "retained_offsets": 52,
+      "gap_counts": {
+        "2": 6,
+        "1": 20
+      },
+      "sources": [
+        {
+          "group": "group-1423bfc166f8d8c2",
+          "source": "calibration/visual_centers/새24_tracksequence_proxy.csv",
+          "sha256": "93dc0ea6c1106682f466e4d0c0eb45e65e0e294997ffb0a145a1c4f52626d1b4"
+        },
+        {
+          "group": "group-e2d3cd4decefa623",
+          "source": "calibration/visual_centers/새30(1)_tracksequence_proxy.csv",
+          "sha256": "7874edd16f4885f579a693382da08c7f0712f51c0e917d62da18d40fb2b49633"
+        }
+      ]
+    },
+    "fold_4_train_augmented": {
+      "reference": "reviewed image-derived center proxy, not manual ground truth",
+      "canonical_width_px": 1920.0,
+      "radius_p95_px": 1.8463831689450239,
+      "retained_offsets": 137,
+      "gap_counts": {
+        "2": 4,
+        "1": 18
+      },
+      "sources": [
+        {
+          "group": "group-2514eb88479a5254",
+          "source": "calibration/visual_centers/드론21_track_sequence_proxy.csv",
+          "sha256": "74554ce008892371776cfe37ec0175e39a5c76b55d518fb883716b11e7adb911"
+        },
+        {
+          "group": "group-8bac11ac5b549b8f",
+          "source": "calibration/visual_centers/드론22_tracksequence_proxy.csv",
+          "sha256": "518976cd8a8a06fabe303ab8eff2378b148eaf05def99672b7748b376b2c3cbc"
+        },
+        {
+          "group": "group-1423bfc166f8d8c2",
+          "source": "calibration/visual_centers/새24_tracksequence_proxy.csv",
+          "sha256": "93dc0ea6c1106682f466e4d0c0eb45e65e0e294997ffb0a145a1c4f52626d1b4"
+        },
+        {
+          "group": "group-e2d3cd4decefa623",
+          "source": "calibration/visual_centers/새30(1)_tracksequence_proxy.csv",
+          "sha256": "7874edd16f4885f579a693382da08c7f0712f51c0e917d62da18d40fb2b49633"
+        },
+        {
+          "group": "group-86e51c1909330da6",
+          "source": "calibration/visual_centers/새36(1)_tracksequence_proxy.csv",
+          "sha256": "9995bdbb7de8e81b2fe2515d22a241a06d21718c4b1f863ff9ac6b30ae0d3dec"
+        }
+      ]
+    }
+  },
+  "validation_policy": "real validation for selection; augmented val/test for stress tests",
+  "derived_window_policy": "discard exact repeat arrays within each parent track; original window arrays are always retained",
+  "clock_policy": "only retry legacy clock rejects at 3 ms if fitted-grid residual <= 3 ms; original timestamps preserved",
+  "sequence_config": {
+    "fps": 30.0,
+    "window_seconds": 2.0,
+    "stride_seconds": 1.0,
+    "scale_floor": 0.0025,
+    "max_missing_seconds": 0.1,
+    "max_missing_fraction": 0.1,
+    "clock_tolerance_seconds": 0.001
+  },
+  "sequence_contract_id": "eb9be8154ee0f404",
+  "channels": [
+    "q_x",
+    "q_y",
+    "d_x",
+    "d_y"
+  ],
+  "rf_config": {
+    "target_fps": 30.0,
+    "smoothing_seconds": 0.3,
+    "max_missing_seconds": 0.25,
+    "max_missing_fraction": 0.5,
+    "min_points": 5,
+    "min_duration_seconds": 0.2,
+    "minimum_motion_px_s": 1.0,
+    "turn_threshold_rad_s": 0.5235987755982988,
+    "heading_snr": 3.0,
+    "tortuosity_cap": 100.0
+  },
+  "rf_contract_id": "2b24fd97b83b221b",
+  "model_input_policy": "use MiniRocket NPZ directly; for RF use accepted rows only",
+  "bundle_path_base": "all relocated paths are relative to the directory containing README.md",
+  "original_assets": "original_assets.csv"
+}

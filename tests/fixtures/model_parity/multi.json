@@ -1,0 +1,333 @@
+{
+  "model": "multirocket",
+  "cases": {
+    "fps60": {
+      "response": {
+        "track_id": 7,
+        "label": "bird",
+        "decision_score": -3.0124521769687984,
+        "score_type": "stack_logit_mean",
+        "score_is_probability": false,
+        "abstain_reason": null,
+        "abstain_detail": null,
+        "windows_used": 3,
+        "window_scores": [
+          -6.469091509469132,
+          -1.340336428899331,
+          -1.2279285925379315
+        ],
+        "window_rejections": {},
+        "window_starts_s": [
+          0.0,
+          1.0,
+          2.0
+        ],
+        "model_version": "trajectory-sequence-1.0.1/eb9be8154ee0f404/multirocket-stack/baseline=10000,framescale=30000",
+        "quality": null
+      },
+      "features": null
+    },
+    "long_gap": {
+      "response": {
+        "track_id": 7,
+        "label": "bird",
+        "decision_score": -1.522550805068913,
+        "score_type": "stack_logit_mean",
+        "score_is_probability": false,
+        "abstain_reason": null,
+        "abstain_detail": null,
+        "windows_used": 1,
+        "window_scores": [
+          -1.522550805068913
+        ],
+        "window_rejections": {
+          "long_gap": 3
+        },
+        "window_starts_s": [
+          3.0
+        ],
+        "model_version": "trajectory-sequence-1.0.1/eb9be8154ee0f404/multirocket-stack/baseline=10000,framescale=30000",
+        "quality": null
+      },
+      "features": null
+    },
+    "low_conf": {
+      "response": {
+        "track_id": 7,
+        "label": "drone",
+        "decision_score": 1.019048425697949,
+        "score_type": "stack_logit_mean",
+        "score_is_probability": false,
+        "abstain_reason": null,
+        "abstain_detail": null,
+        "windows_used": 3,
+        "window_scores": [
+          -2.496366631594704,
+          3.229470277470213,
+          2.3240416312183383
+        ],
+        "window_rejections": {},
+        "window_starts_s": [
+          0.0,
+          1.0,
+          2.0
+        ],
+        "model_version": "trajectory-sequence-1.0.1/eb9be8154ee0f404/multirocket-stack/baseline=10000,framescale=30000",
+        "quality": null
+      },
+      "features": null
+    },
+    "short": {
+      "response": {
+        "track_id": 7,
+        "label": "uncertain",
+        "decision_score": null,
+        "score_type": "stack_logit_mean",
+        "score_is_probability": false,
+        "abstain_reason": "insufficient_observation",
+        "abstain_detail": "유효 2초 창 0개 < 최소 1개",
+        "windows_used": 0,
+        "window_scores": [],
+        "window_rejections": {
+          "short_track": 1
+        },
+        "window_starts_s": [],
+        "model_version": "trajectory-sequence-1.0.1/eb9be8154ee0f404/multirocket-stack/baseline=10000,framescale=30000",
+        "quality": null
+      },
+      "features": null
+    },
+    "smooth": {
+      "response": {
+        "track_id": 7,
+        "label": "drone",
+        "decision_score": 1.019048425697949,
+        "score_type": "stack_logit_mean",
+        "score_is_probability": false,
+        "abstain_reason": null,
+        "abstain_detail": null,
+        "windows_used": 3,
+        "window_scores": [
+          -2.496366631594704,
+          3.229470277470213,
+          2.3240416312183383
+        ],
+        "window_rejections": {},
+        "window_starts_s": [
+          0.0,
+          1.0,
+          2.0
+        ],
+        "model_version": "trajectory-sequence-1.0.1/eb9be8154ee0f404/multirocket-stack/baseline=10000,framescale=30000",
+        "quality": null
+      },
+      "features": null
+    },
+    "tiny": {
+      "response": {
+        "track_id": 7,
+        "label": "uncertain",
+        "decision_score": null,
+        "score_type": "stack_logit_mean",
+        "score_is_probability": false,
+        "abstain_reason": "insufficient_observation",
+        "abstain_detail": "유효 2초 창 0개 < 최소 1개",
+        "windows_used": 0,
+        "window_scores": [],
+        "window_rejections": {
+          "short_track": 1
+        },
+        "window_starts_s": [],
+        "model_version": "trajectory-sequence-1.0.1/eb9be8154ee0f404/multirocket-stack/baseline=10000,framescale=30000",
+        "quality": null
+      },
+      "features": null
+    },
+    "unstabilized": {
+      "response": {
+        "track_id": 7,
+        "label": "uncertain",
+        "decision_score": null,
+        "score_type": "stack_logit_mean",
+        "score_is_probability": false,
+        "abstain_reason": "invalid_input",
+        "abstain_detail": "Expected explicitly stabilized A export",
+        "windows_used": 0,
+        "window_scores": [],
+        "window_rejections": {},
+        "window_starts_s": [],
+        "model_version": "trajectory-sequence-1.0.1/eb9be8154ee0f404/multirocket-stack/baseline=10000,framescale=30000",
+        "quality": null
+      },
+      "features": null
+    }
+  },
+  "classify_request_schema": {
+    "properties": {
+      "track_sequence": {
+        "$ref": "#/components/schemas/TrackSequence"
+      },
+      "margin_threshold": {
+        "type": "number",
+        "minimum": 0.0,
+        "title": "Margin Threshold",
+        "description": "|평균 margin| 보류 임계값. 확률 임계값이 아님",
+        "default": 0.0
+      },
+      "min_windows": {
+        "type": "integer",
+        "minimum": 1.0,
+        "title": "Min Windows",
+        "description": "판정에 필요한 최소 유효 2초 창 수",
+        "default": 1
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "track_sequence"
+    ],
+    "title": "ClassifyRequest",
+    "description": "분류 요청 payload를 담는 모델.\n\n한 줄 설명:\n    Spring Boot → FastAPI classifier로 들어오는 입력 형식.\n\n왜 이렇게 했는가:\n    MiniRocket은 요약 특징이 아니라 시간 순서가 있는 중심 좌표를 받는다.\n    그래서 B의 9개 요약 특징(FeatureVector) 대신 A의 TrackSequence를 그대로 받고,\n    2초 창 변환은 C가 B의 trajectory_sequence 구현을 그대로 호출해 수행한다.\n    학습용 전처리와 서비스용 전처리를 같은 함수로 묶어야 결과가 갈리지 않는다.\n\n필드:\n    track_sequence (TrackSequence): A가 만든 CMC 보정 후 추적 결과\n    margin_threshold (float): |평균 margin|이 이 값보다 작으면 uncertain (0이면 보류 없음)\n    min_windows (int): 판정에 필요한 최소 유효 창 수"
+  },
+  "prediction_schema": {
+    "properties": {
+      "track_id": {
+        "type": "integer",
+        "minimum": 0.0,
+        "title": "Track Id"
+      },
+      "label": {
+        "type": "string",
+        "enum": [
+          "bird",
+          "drone",
+          "uncertain"
+        ],
+        "title": "Label"
+      },
+      "decision_score": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Decision Score",
+        "description": "결합기 logit 의 창 평균. 확률 아님"
+      },
+      "score_type": {
+        "type": "string",
+        "const": "stack_logit_mean",
+        "title": "Score Type",
+        "default": "stack_logit_mean"
+      },
+      "score_is_probability": {
+        "type": "boolean",
+        "const": false,
+        "title": "Score Is Probability",
+        "default": false
+      },
+      "abstain_reason": {
+        "anyOf": [
+          {
+            "type": "string",
+            "enum": [
+              "invalid_input",
+              "insufficient_observation",
+              "low_separation"
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Abstain Reason"
+      },
+      "abstain_detail": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Abstain Detail"
+      },
+      "windows_used": {
+        "type": "integer",
+        "minimum": 0.0,
+        "title": "Windows Used",
+        "default": 0
+      },
+      "window_scores": {
+        "items": {
+          "type": "number"
+        },
+        "type": "array",
+        "title": "Window Scores"
+      },
+      "window_rejections": {
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "type": "object",
+        "title": "Window Rejections"
+      },
+      "window_starts_s": {
+        "items": {
+          "type": "number"
+        },
+        "type": "array",
+        "title": "Window Starts S"
+      },
+      "model_version": {
+        "type": "string",
+        "title": "Model Version"
+      },
+      "quality": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/TrackQuality"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "processing_time_ms": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "minimum": 0.0
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Processing Time Ms",
+        "description": "FastAPI 내부 처리 시간 (ms)"
+      }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+      "track_id",
+      "label",
+      "model_version"
+    ],
+    "title": "PredictionResult"
+  },
+  "paths": [
+    "/analyze",
+    "/api/files",
+    "/api/tracks/manual",
+    "/api/videos/upload",
+    "/classify",
+    "/health"
+  ],
+  "fixtures_sha256": "5ae5362c7c8c53c5a651f8cc9fd9fe96c7f9c435494be7b27ab1aa4e6b8d36b2"
+}

@@ -1,8 +1,11 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 
-from ai_server.schemas import AnalyzeRequest, AnalyzeResponse
-from ai_server.services.stabilization import build_stabilization_info
-from ai_server.services.tracker import build_bootstrap_track
+from ai_server.schemas import AnalyzeResponse
+from ai_server.services.tracker import (
+    AnalyzePipelineError,
+    run_manual_tracking_pipeline,
+)
+from ai_server.tracking_schemas import ManualTrackingRequest
 
 router = APIRouter(tags=["analyze"])
 
@@ -13,15 +16,11 @@ def health_check() -> dict[str, str]:
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)
-def analyze_video(payload: AnalyzeRequest) -> AnalyzeResponse:
-    stabilization = build_stabilization_info(payload.stabilization_method)
-    track = build_bootstrap_track(
-        track_id=1,
-        source_video_id=payload.source_video_id,
-        stabilization=stabilization,
-    )
-    return AnalyzeResponse(
-        source_video_id=payload.source_video_id,
-        tracks=[track],
-        message="Bootstrap response. Replace detector/tracker stubs with real pipeline stages.",
-    )
+def analyze_video(payload: ManualTrackingRequest) -> AnalyzeResponse:
+    try:
+        return run_manual_tracking_pipeline(payload)
+    except AnalyzePipelineError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
