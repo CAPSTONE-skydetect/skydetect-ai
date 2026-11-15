@@ -21,21 +21,22 @@ EXPOSE 8000
 CMD ["uvicorn", "ai_server.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # Same source, separate dependency environments and immutable checkpoints.
-FROM runtime AS minirocket
-ENV SKYDETECT_MODEL=minirocket
-COPY requirements/minirocket.txt ./requirements.txt
-RUN pip install -r requirements.txt
+# 시퀀스 모델 서버 공통층: 서빙에 필요한 런타임 의존성과 코드만 담는다.
+# research 는 서버가 import 하는 전처리 모듈(B 계약)만 복사한다. 학습·평가 스크립트와
+# 노트북 도구는 넣지 않는다 (테스트 이미지 docker/Dockerfile.test 가 따로 추가한다).
+FROM runtime AS sequence-base
+COPY requirements/serve-sequence.txt ./requirements.txt
+RUN pip install -r requirements.txt && pip check
 COPY ai_server ./ai_server
-COPY research ./research
+COPY research/__init__.py research/trajectory_sequence.py research/features.py research/feature_contract.py ./research/
+
+FROM sequence-base AS minirocket
+ENV SKYDETECT_MODEL=minirocket
 COPY models/minirocket_classifier.joblib ./models/minirocket_classifier.joblib
 
 # MultiRocket Stack: MiniRocket 과 같은 의존성(aeon), 체크포인트만 다르다.
-FROM runtime AS multirocket
+FROM sequence-base AS multirocket
 ENV SKYDETECT_MODEL=multirocket
-COPY requirements/minirocket.txt ./requirements.txt
-RUN pip install -r requirements.txt
-COPY ai_server ./ai_server
-COPY research ./research
 COPY models/multirocket_stack_classifier.joblib ./models/multirocket_stack_classifier.joblib
 
 # Last target preserves the historical default: docker build . runs RF.
