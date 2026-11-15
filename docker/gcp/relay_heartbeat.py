@@ -20,8 +20,11 @@ while True:
     try:
         items = json.load(urllib.request.urlopen(API, timeout=3)).get("items", [])
         path = next((p for p in items if p.get("name") == "pi"), None)
-        if path and path.get("ready") and path.get("inboundBytes", 0) > last:
-            last = path["inboundBytes"]
+        received = path.get("inboundBytes", 0) if path else 0
+        # MediaMTX 가 재시작되면 수신 바이트가 0 부터 다시 센다. "이전보다 크면"으로 비교하면
+        # 재시작 뒤 상태가 갱신되지 않아 clip-bridge 가 클립 요청을 모두 503 으로 거절한다.
+        if path and path.get("ready") and received != last:
+            last = received
             state = dict(instance_id="cloud-heartbeat", status="running", started_at_epoch=started,
                          hls_url=HLS_URL, last_media_progress_at=time.time(), capture_children=[])
             tmp = STATE.with_suffix(".json.tmp")

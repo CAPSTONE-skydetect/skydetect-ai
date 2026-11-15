@@ -46,7 +46,9 @@ paths:
   pi:
     source: publisher
     record: true
-    recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f_%z
+    # clip-bridge 는 파일 이름 끝이 ±HHMM 이어야 녹화 시각을 읽는다 (server.py SEGMENT_NAME).
+    # 컨테이너는 UTC 라 %z 가 "Z" 로 나와 클립 추출이 전부 실패했다. UTC 오프셋을 그대로 적는다.
+    recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f_+0000
     recordFormat: fmp4
     recordPartDuration: 1s
     recordSegmentDuration: 10s
