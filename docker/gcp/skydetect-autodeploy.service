@@ -1,0 +1,8 @@
+[Unit]
+Description=SkyDetect: pull updated :main images from Artifact Registry and restart changed services
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/skydetect/autodeploy.sh
