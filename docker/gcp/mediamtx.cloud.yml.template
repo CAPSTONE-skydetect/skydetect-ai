@@ -1,7 +1,9 @@
 # 앱 VM 의 MediaMTX (hardware/raspberry-pi/mediamtx.yml 의 클라우드판).
 # 현장 노트북이 파이 영상을 RTSP(TCP)로 송출하면 받아서 녹화하고 HLS 로 미리보기를 낸다.
 #   송출: rtsp://publisher:<비밀번호>@<앱 VM 외부 IP>:8554/pi  (방화벽은 송출 노트북 IP 만 허용)
-#   미리보기: 게이트웨이 /live/pi/index.m3u8 → mediamtx:8888
+#   미리보기(WebRTC): 연결 협상(WHEP)은 게이트웨이 /whep/pi/whep → mediamtx:8889,
+#     영상은 브라우저 ↔ 앱 VM 공인 IP 의 8189(UDP, 막히면 TCP)로 직접 오간다 (로드밸런서는 HTTP 만 중계).
+#   미리보기(HLS, 예비): 게이트웨이 /live/pi/index.m3u8 → mediamtx:8888
 # __PUBLISH_PASS__ 는 VM 에서 렌더링할 때 채운다. 비밀번호를 저장소에 넣지 않는다.
 logLevel: info
 logDestinations: [stdout]
@@ -39,7 +41,15 @@ hlsSegmentDuration: 1s
 hlsPartDuration: 200ms
 hlsSegmentCount: 7
 hlsAllowOrigins: ["*"]
-webrtc: false
+webrtc: true
+webrtcAddress: :8889
+webrtcAllowOrigins: ["*"]
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+# 컨테이너 내부 IP 는 브라우저가 닿을 수 없으므로 앱 VM 의 고정 공인 IP(skydetect-app-ip)만 후보로 알린다.
+webrtcIPsFromInterfaces: false
+webrtcAdditionalHosts: [34.158.215.55]
+webrtcICEServers2: []
 srt: false
 
 paths:

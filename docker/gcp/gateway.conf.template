@@ -38,7 +38,16 @@ server {
         proxy_buffering off;
     }
 
-    # 파이 실시간 미리보기 (MediaMTX HLS). 예: /live/pi/index.m3u8
+    # 파이 실시간 미리보기 WebRTC 연결 협상 (WHEP). 예: POST /whep/pi/whep
+    # 영상 자체는 8189 로 브라우저와 MediaMTX 가 직접 주고받는다.
+    location /whep/ {
+        proxy_pass http://mediamtx:8889/;
+        # 세션 주소(Location: /pi/whep/<id>)에 접두어를 붙여 DELETE 가 같은 경로로 오게 한다.
+        proxy_redirect / /whep/;
+        proxy_read_timeout 30s;
+    }
+
+    # 파이 실시간 미리보기 (MediaMTX HLS, WebRTC 가 막힌 환경용 예비). 예: /live/pi/index.m3u8
     location /live/ {
         proxy_pass http://mediamtx:8888/;
         # MediaMTX 가 쿠키 확인용으로 /pi/index.m3u8?cookieCheck=1 처럼 접두어 없는 주소로 302 를 보낸다.
