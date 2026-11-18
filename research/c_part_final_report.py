@@ -38,10 +38,12 @@ def cm_sum(x: pd.DataFrame) -> np.ndarray:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", type=Path, required=True)
-    parser.add_argument("--eval", default="test_real", choices=["test_real", "validation_real"])
+    parser.add_argument("--eval", default="test_real", choices=["test_real", "validation_real", "test_augmented"])
     parser.add_argument("--name", help="이미지 제목에 쓸 이름 (기본: 결과 폴더 이름)")
     parser.add_argument("--image", type=Path, help="혼동행렬 이미지 경로 (기본: 결과 폴더 안)")
     args = parser.parse_args()
+    import matplotlib.pyplot as plt
+    plt.rcParams["font.family"] = ["Malgun Gothic", "AppleGothic", "NanumGothic", "DejaVu Sans"]
     d = pd.read_csv(args.results / "case_results.csv", keep_default_na=False)
     if "scenario" in d and (d.scenario == "S").any():
         d = d[d.scenario == "S"]
@@ -49,8 +51,10 @@ def main() -> None:
     if args.eval not in evals:
         raise SystemExit(f"{args.eval} 결과가 없다 (있는 평가: {sorted(evals)})")
     main_name = NAMES[args.eval]
-    columns = [args.eval] if args.eval == "validation_real" else ["validation_real", args.eval]
-    print(f"### 핵심 결과: {main_name} 실촬영 (임계값 0, 5개 case 평균 ± 표준편차)\n")
+    columns = ([args.eval] if args.eval == "validation_real"
+               else ["validation_augmented", args.eval] if args.eval == "test_augmented"
+               else ["validation_real", args.eval])
+    print(f"### 핵심 결과: {main_name}{'' if args.eval.endswith('augmented') else ' 실촬영'} (임계값 0, 5개 case 평균 ± 표준편차)\n")
     print("| 단위 | 지표 | " + " | ".join(NAMES[c] for c in columns) + " |\n| --- | --- |" + " --- |" * len(columns))
     for level, label in (("track", "track"), ("group", "그룹")):
         for key, metric in METRICS if level == "track" else METRICS[:1]:
@@ -67,7 +71,7 @@ def main() -> None:
         cm = cm_sum(sel(d, args.eval, level))
         print(f"| {label} | {cm[0][0]} | {cm[0][1]} | {cm[1][0]} | {cm[1][1]} |")
     stress = args.eval.replace("_real", "_augmented")
-    if stress in evals:
+    if stress != args.eval and stress in evals:
         print(f"\n점검 ({NAMES[stress]} 세트, track balanced accuracy): {fmt(sel(d, stress, 'track').balanced_accuracy)}")
     image = args.image or args.results / f"confusion_S_{main_name}_track.png"
     plot(cm_sum(track), f"{args.name or args.results.name} (track, {main_name}, {len(track)} cases pooled)", image)
