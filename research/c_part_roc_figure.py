@@ -5,6 +5,7 @@
 "case 별 AUC 의 평균 ± 표준편차"이고, 합친 곡선의 AUC 는 따로 적는다. 임계값 0 지점을 표시한다.
 
     python -m research.c_part_roc_figure --out docs/images/c_part/FINAL_test_roc_track.png
+    python -m research.c_part_roc_figure --eval test_augmented --out docs/images/c_part/FINAL_test_augmented_roc_track.png
 """
 from __future__ import annotations
 
@@ -27,8 +28,8 @@ MODELS = [  # 범주 색은 고정 순서 (dataviz 기본 팔레트 1·2번, 색
 INK, INK_2, GRID, SURFACE = "#0b0b0b", "#52514e", "#e6e5e0", "#fcfcfb"
 
 
-def track_scores(folder: Path, case: int) -> pd.DataFrame:
-    d = pd.read_csv(folder / "pred" / f"case{case}_S_test_real.csv")
+def track_scores(folder: Path, case: int, ev: str = "test_real") -> pd.DataFrame:
+    d = pd.read_csv(folder / "pred" / f"case{case}_S_{ev}.csv")
     d["track"] = seq.track_ids(d.sample_id)
     t = d.groupby(["track", "group_id", "label"], as_index=False).decision.mean()
     t["case"] = case
@@ -38,6 +39,8 @@ def track_scores(folder: Path, case: int) -> pd.DataFrame:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--eval", default="test_real", choices=["test_real", "test_augmented"],
+                        help="test_augmented: 분할 뒤 test 안에서만 만든 증강 포함 세트")
     args = parser.parse_args()
     plt.rcParams["font.family"] = ["Malgun Gothic", "AppleGothic", "NanumGothic", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
@@ -49,7 +52,7 @@ def main() -> None:
     ax.text(0.62, 0.55, "무작위 판정", color=INK_2, fontsize=8, rotation=43)
 
     for name, folder, color in MODELS:
-        cases = [track_scores(Path(folder), k) for k in range(5)]
+        cases = [track_scores(Path(folder), k, args.eval) for k in range(5)]
         per_case = [roc_auc_score(c.label == "drone", c.decision) for c in cases]
         pooled = pd.concat(cases)
         y = (pooled.label == "drone").to_numpy()
@@ -70,7 +73,8 @@ def main() -> None:
     ax.set_ylim(0.0, 1.01)
     ax.set_xlabel("새를 드론으로 잘못 판정한 비율 (1 − 새 recall)", color=INK_2, fontsize=9)
     ax.set_ylabel("드론을 드론으로 맞힌 비율 (드론 recall)", color=INK_2, fontsize=9)
-    ax.set_title("최종 test ROC 곡선 (track 단위, 5개 case 합산)", color=INK, fontsize=11, loc="left", pad=10)
+    what = "test 증강 포함" if args.eval == "test_augmented" else "test"
+    ax.set_title(f"최종 {what} ROC 곡선 (track 단위, 5개 case 합산)", color=INK, fontsize=11, loc="left", pad=10)
     ax.grid(color=GRID, lw=0.8)
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
