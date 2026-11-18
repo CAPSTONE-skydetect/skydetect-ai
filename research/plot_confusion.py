@@ -21,7 +21,9 @@ def plot(cm, title: str, path: Path) -> None:
     for i in range(2):
         for j in range(2):
             color = "white" if rate[i, j] > .5 else "#222"
-            ax.text(j + .5, 1.58 - i, str(cm[i, j]), ha="center", va="center",
+            v = cm[i, j]
+            text = str(int(v)) if float(v).is_integer() else f"{v:.1f}"
+            ax.text(j + .5, 1.58 - i, text, ha="center", va="center",
                     fontsize=26, fontweight="bold", color=color)
             ax.text(j + .5, 1.28 - i, f"{rate[i, j] * 100:.0f}%", ha="center", va="center",
                     fontsize=11, color=color)
