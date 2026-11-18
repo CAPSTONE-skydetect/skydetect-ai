@@ -43,6 +43,7 @@ def main() -> None:
     parser.add_argument("--image", type=Path, help="혼동행렬 이미지 경로 (기본: 결과 폴더 안)")
     parser.add_argument("--mean-cm", action="store_true",
                         help="이미지를 5개 case 합산 대신 case 평균 혼동행렬로 그린다 (비율은 같음)")
+    parser.add_argument("--round", action="store_true", help="--mean-cm 의 평균값을 정수로 반올림해 그린다")
     args = parser.parse_args()
     import matplotlib.pyplot as plt
     plt.rcParams["font.family"] = ["Malgun Gothic", "AppleGothic", "NanumGothic", "DejaVu Sans"]
@@ -78,7 +79,9 @@ def main() -> None:
     image = args.image or args.results / f"confusion_S_{main_name}_track.png"
     if args.mean_cm:
         cm = cm_sum(track) / len(track)
-        print(f"case 평균 혼동행렬: {cm.round(1).tolist()} (합계 {cm.sum():.1f})")
+        if args.round:
+            cm = cm.round().astype(int)
+        print(f"case 평균 혼동행렬: {cm.round(1).tolist()} (합계 {cm.sum():.1f}{', 정수 반올림' if args.round else ''})")
         title = f"{args.name or args.results.name} (track, {main_name}, {len(track)} cases mean)"
     else:
         cm, title = cm_sum(track), f"{args.name or args.results.name} (track, {main_name}, {len(track)} cases pooled)"
