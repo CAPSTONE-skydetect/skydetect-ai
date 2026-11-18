@@ -41,6 +41,8 @@ def main() -> None:
     parser.add_argument("--eval", default="test_real", choices=["test_real", "validation_real", "test_augmented"])
     parser.add_argument("--name", help="이미지 제목에 쓸 이름 (기본: 결과 폴더 이름)")
     parser.add_argument("--image", type=Path, help="혼동행렬 이미지 경로 (기본: 결과 폴더 안)")
+    parser.add_argument("--mean-cm", action="store_true",
+                        help="이미지를 5개 case 합산 대신 case 평균 혼동행렬로 그린다 (비율은 같음)")
     args = parser.parse_args()
     import matplotlib.pyplot as plt
     plt.rcParams["font.family"] = ["Malgun Gothic", "AppleGothic", "NanumGothic", "DejaVu Sans"]
@@ -74,7 +76,13 @@ def main() -> None:
     if stress != args.eval and stress in evals:
         print(f"\n점검 ({NAMES[stress]} 세트, track balanced accuracy): {fmt(sel(d, stress, 'track').balanced_accuracy)}")
     image = args.image or args.results / f"confusion_S_{main_name}_track.png"
-    plot(cm_sum(track), f"{args.name or args.results.name} (track, {main_name}, {len(track)} cases pooled)", image)
+    if args.mean_cm:
+        cm = cm_sum(track) / len(track)
+        print(f"case 평균 혼동행렬: {cm.round(1).tolist()} (합계 {cm.sum():.1f})")
+        title = f"{args.name or args.results.name} (track, {main_name}, {len(track)} cases mean)"
+    else:
+        cm, title = cm_sum(track), f"{args.name or args.results.name} (track, {main_name}, {len(track)} cases pooled)"
+    plot(cm, title, image)
     print(f"\n혼동행렬 이미지: {image}")
 
 
