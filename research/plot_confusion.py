@@ -12,10 +12,14 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 
-def plot(cm, title: str, path: Path) -> None:
-    """cm: [[bird→bird, bird→drone], [drone→bird, drone→drone]] (행=실제, 열=예측)."""
+def plot(cm, title: str, path: Path, rate_cm=None) -> None:
+    """cm: [[bird→bird, bird→drone], [drone→bird, drone→drone]] (행=실제, 열=예측).
+
+    rate_cm: 비율을 계산할 행렬 (반올림 전 값). 없으면 cm 으로 계산한다.
+    """
     cm = np.asarray(cm)
-    rate = cm / cm.sum(1, keepdims=True)
+    base = np.asarray(cm if rate_cm is None else rate_cm, dtype=float)
+    rate = base / base.sum(1, keepdims=True)
     fig, ax = plt.subplots(figsize=(4.4, 3.9), dpi=150)
     ax.imshow(rate, cmap=plt.get_cmap("Blues"), vmin=0, vmax=1.15, extent=(0, 2, 0, 2))
     for i in range(2):
