@@ -78,14 +78,15 @@ def main() -> None:
         print(f"\n점검 ({NAMES[stress]} 세트, track balanced accuracy): {fmt(sel(d, stress, 'track').balanced_accuracy)}")
     image = args.image or args.results / f"confusion_S_{main_name}_track.png"
     if args.mean_cm:
-        cm = cm_sum(track) / len(track)
+        cm = rate_cm = cm_sum(track) / len(track)
         if args.round:
             cm = cm.round().astype(int)
         print(f"case 평균 혼동행렬: {cm.round(1).tolist()} (합계 {cm.sum():.1f}{', 정수 반올림' if args.round else ''})")
         title = f"{args.name or args.results.name} (track, {main_name}, {len(track)} cases mean)"
     else:
+        rate_cm = None
         cm, title = cm_sum(track), f"{args.name or args.results.name} (track, {main_name}, {len(track)} cases pooled)"
-    plot(cm, title, image)
+    plot(cm, title, image, rate_cm)
     print(f"\n혼동행렬 이미지: {image}")
 
 
